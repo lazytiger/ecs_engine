@@ -9,6 +9,20 @@ struct UserTestSystem {
     lib: DynamicSystem<fn(&UserInfo, &BagInfo)>,
 }
 
+impl UserTestSystem {
+    pub fn setup(
+        mut self,
+        world: &mut World,
+        builder: &mut DispatcherBuilder,
+        dm: &DynamicManager,
+    ) {
+        world.register::<UserInfo>();
+        world.register::<BagInfo>();
+        self.lib.init("".into(), "".into(), dm);
+        builder.add(self, "user_test", &[]);
+    }
+}
+
 impl<'a> System<'a> for UserTestSystem {
     type SystemData = (
         ReadStorage<'a, UserInfo>,
@@ -27,17 +41,23 @@ impl<'a> System<'a> for UserTestSystem {
     }
 }
 
-pub fn user_test_setup(world: &mut World, builder: &mut DispatcherBuilder, dm: &DynamicManager) {
-    world.register::<UserInfo>();
-    world.register::<BagInfo>();
-    let mut system = UserTestSystem::default();
-    system.lib.init("".into(), "".into(), dm);
-    builder.add(system, "user_test", &[]);
-}
-
 #[derive(Default)]
 struct GuildTestSystem {
     lib: DynamicSystem<fn(&UserInfo, &GuildInfo)>,
+}
+
+impl GuildTestSystem {
+    pub fn setup(
+        mut self,
+        world: &mut World,
+        builder: &mut DispatcherBuilder,
+        dm: &DynamicManager,
+    ) {
+        world.register::<UserInfo>();
+        world.register::<GuildInfo>();
+        self.lib.init("".into(), "".into(), dm);
+        builder.add(self, "guild_test", &[]);
+    }
 }
 
 impl<'a> System<'a> for GuildTestSystem {
@@ -58,20 +78,12 @@ impl<'a> System<'a> for GuildTestSystem {
     }
 }
 
-pub fn guild_test_setup(world: &mut World, builder: &mut DispatcherBuilder, dm: &DynamicManager) {
-    world.register::<UserInfo>();
-    world.register::<GuildInfo>();
-    let mut system = GuildTestSystem::default();
-    system.lib.init("".into(), "".into(), dm);
-    builder.add(system, "guild_test", &[]);
-}
-
 pub fn run() {
     let mut world = World::new();
     let mut builder = DispatcherBuilder::new();
     let dm = DynamicManager::default();
-    user_test_setup(&mut world, &mut builder, &dm);
-    guild_test_setup(&mut world, &mut builder, &dm);
+    UserTestSystem::default().setup(&mut world, &mut builder, &dm);
+    GuildTestSystem::default().setup(&mut world, &mut builder, &dm);
     world.insert(dm);
     let mut dispatcher = builder.build();
     dispatcher.setup(&mut world);

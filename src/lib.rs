@@ -97,7 +97,7 @@ impl DynamicManager {
         if let Some(lib) = self.libraries.read().unwrap().get(lib) {
             lib.clone()
         } else {
-            let mut nlib = Arc::new(Library::new(lib.clone()));
+            let nlib = Arc::new(Library::new(lib.clone()));
             self.libraries
                 .write()
                 .unwrap()
