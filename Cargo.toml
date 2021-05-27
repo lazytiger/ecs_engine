@@ -1,0 +1,16 @@
+[package]
+name = "ecs_engine"
+version = "0.1.0"
+authors = ["hoping <baihaoping@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+specs={version = "0.16", features = ["specs-derive"]}
+lazy_static = "1.4.0"
+libloading = "0.7.0"
+codegen = {path = "codegen"}
+
+[workspace]
+members = ["codegen"]
