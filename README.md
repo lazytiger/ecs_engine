@@ -8,6 +8,8 @@
 
 ## 技术选型
 * ECS
+    * 介绍
+        * 
     * 优点
         * 游戏行业原生框架，适用性很高
         * 基于SOA，对于缓存友好，执行效率高
@@ -24,6 +26,79 @@
     * 缺点
         * 学习成本高，学习曲线陡
         * 编译速度慢，影响开发迭代速度
+    
+* Rust的ECS实现们
+    * specs
+        * 优点
+            * 成熟度比较高，各方面比较平衡
+            * 接口设计合理，扩展性比较好
+        * 缺点
+            * 接口对新人不友好
+            * 模板代码过多
+        * 示例
+        ```rust
+        #[derive(Default)]
+        struct UserTestSystem {
+            lib: DynamicSystem<fn(&UserInfo, &BagInfo)>,
+        }
+
+        impl UserTestSystem {
+            pub fn setup(
+                mut self,
+                world: &mut World,
+                builder: &mut DispatcherBuilder,
+                dm: &DynamicManager,
+            ) {
+                world.register::<UserInfo>();
+                world.register::<BagInfo>();
+                self.lib.init("".into(), "".into(), dm);
+                builder.add(self, "user_test", &[]);
+            }
+        }
+
+        impl<'a> System<'a> for UserTestSystem {
+            type SystemData = (
+                ReadStorage<'a, UserInfo>,
+                ReadStorage<'a, BagInfo>,
+                Read<'a, DynamicManager>,
+            );
+
+            fn run(&mut self, (user, bag, dm): Self::SystemData) {
+                if let Some(symbol) = self.lib.get_symbol(&dm) {
+                    for (user, bag) in (&user, &bag).join() {
+                        (*symbol)(user, bag);
+                    }
+                } else {
+                    todo!()
+                }
+            }
+        }
+        ```
+    * legion
+        * 优点
+            * 接口友好
+            * 模板代码少
+        * 缺点
+            * 成熟度低，适用于客户端使用场景的ecs（本身创意也来自unity的jobs）
+            * 各方面不平衡，当component数目超过100之后，性能会有急剧下降
+        * 示例
+        ```rust
+        #[system]
+        fn user_system(user:&UserInfo, bag:&BagInfo) {}
+        ```
+      
+* 方案
+    * ECS框架方面，经过各方面测试，最终决定使用specs，specs的两个缺点实际上可以参考legion的实现来自己通过proc_macro来进行扩展
+    同时还可以根据我们的实际需求来进行调整, 这样一来可以使得ECS的思维习惯方面的缺点降到最低
+      
+    * ECS设计导致的调度问题，只需要在component层面进行数据分解操作就可以了，对于整体影响比较小，另外还可以通过system来监控执行时间确认整体的设计是否合理
+    
+    * 采用上面的方案之后，每个业务只需要根据不同的请求来实现对应的函数即可，对于Rust而言，如果不涉及到持有引用，那我们几乎不会遇到复杂的生命周期问题
+    所以，这个方案也在一定程度上降低了rust的使用成本
+      
+    * ECS的代码与数据分离的设计，使得我们可以将具体的system实现放到一个个独立的动态lib库里实现，这样一来每个业务代码相互独立，单个工程编译简单，
+    并且可以直接编译成动态链接库，从而实现动态更新
+      
     
 ## 需求抽象
 我们从客户端发出请求的角度来对所有请求类型进行总结，会发现以下三类
@@ -58,7 +133,7 @@
   最终宏系统会自动推导成上面的形式
   
 * 多人目标请求
-这类请求，一般来说需要进行特殊分析，目前能够想到的一种方式是这样的
+这类请求，一般来说需要进行特殊分析，目前能够想到的一种方式是这样的, 比如单人需要操作公会对象
   ```rust
   #[system(multi)]
   fn multi_target(user:&UserInfo, #[multi(users)] guild:&GuildInfo){}
