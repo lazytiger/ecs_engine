@@ -1,5 +1,5 @@
-use crate::{BagInfo, DynamicManager, UserInfo};
 use codegen::system;
+use ecs_engine::{BagInfo, DynamicManager, UserInfo};
 use specs::{DispatcherBuilder, LazyUpdate, World, WorldExt};
 
 #[system]
@@ -10,7 +10,7 @@ fn user_derive(_user: &UserInfo, _bag: &BagInfo, #[state] _other: &usize) {}
 #[dynamic(lib = "guild", fn = "test")]
 fn guild_derive(_user: &UserInfo, _bag: &BagInfo, #[resource] _lazy_update: &LazyUpdate) {}
 
-pub fn run() {
+fn main() {
     let mut world = World::new();
     let mut builder = DispatcherBuilder::new();
     let dm = DynamicManager::default();

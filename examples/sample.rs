@@ -1,7 +1,7 @@
 use specs::shred::DynamicSystemData;
 use specs::{DispatcherBuilder, Entities, Join, Read, ReadStorage, System, World, WorldExt};
 
-use crate::{BagInfo, DynamicManager, DynamicSystem, GuildInfo, Library, Symbol, UserInfo};
+use ecs_engine::{BagInfo, DynamicManager, DynamicSystem, GuildInfo, UserInfo};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -63,22 +63,27 @@ impl GuildTestSystem {
 impl<'a> System<'a> for GuildTestSystem {
     type SystemData = (
         Entities<'a>,
+        Read<'a, DynamicManager>,
         ReadStorage<'a, UserInfo>,
         ReadStorage<'a, GuildInfo>,
     );
 
-    fn run(&mut self, (entities, user, guild): Self::SystemData) {
-        for (entity, _user) in (&entities, &user).join() {
-            if let Some(_guild) = guild.get(entity) {
-                //guild_test(user, guild);
-            } else {
-                //log
+    fn run(&mut self, (entities, dm, user, guild): Self::SystemData) {
+        if let Some(symbol) = self.lib.get_symbol(&dm) {
+            for (entity, user) in (&entities, &user).join() {
+                if let Some(guild) = guild.get(entity) {
+                    (*symbol)(user, guild);
+                } else {
+                    //log
+                }
             }
+        } else {
+            //log
         }
     }
 }
 
-pub fn run() {
+fn main() {
     let mut world = World::new();
     let mut builder = DispatcherBuilder::new();
     let dm = DynamicManager::default();

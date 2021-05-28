@@ -1,3 +1,9 @@
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
@@ -5,14 +11,6 @@ pub use libloading::os::windows::Symbol;
 use specs::world::Index;
 use specs::BitSet;
 use specs::{Component, VecStorage};
-
-mod derive;
-mod sample;
-pub use derive::run as derive_run;
-pub use sample::run as sample_run;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
 
 #[derive(Component)]
 #[storage(VecStorage)]
@@ -160,4 +158,47 @@ impl<T> DynamicSystem<T> {
         self.fname = fname;
         self.get_symbol(dm).unwrap();
     }
+}
+
+pub struct Mutable<T, const N: usize> {
+    old: Option<T>,
+    curr: T,
+}
+
+impl<T, const N: usize> Deref for Mutable<T, N> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.curr
+    }
+}
+
+impl<T, const N: usize> Mutable<T, N>
+where
+    T: Clone,
+    T: Default,
+{
+    pub fn get_mut(&mut self) -> &mut T {
+        if let None = self.old {
+            self.old.replace(self.curr.clone());
+        }
+        MODS[N].store(true, Ordering::Relaxed);
+        &mut self.curr
+    }
+
+    pub fn modified() -> bool {
+        MODS[N].load(Ordering::Relaxed)
+    }
+}
+
+pub const MAX_COMPONENTS: usize = 1024;
+
+lazy_static::lazy_static! {
+    pub static ref MODS:Vec<AtomicBool> = {
+        let mut mods = Vec::with_capacity(MAX_COMPONENTS);
+        for i in 0..MAX_COMPONENTS {
+           mods.push(AtomicBool::new(false));
+        }
+        mods
+    };
 }
