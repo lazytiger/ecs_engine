@@ -1,6 +1,6 @@
 use codegen::system;
 use ecs_engine::{BagInfo, DynamicManager, UserInfo};
-use specs::{DispatcherBuilder, LazyUpdate, World, WorldExt};
+use specs::{DispatcherBuilder, Join, LazyUpdate, World, WorldExt};
 
 #[system]
 #[dynamic(user)]
@@ -14,8 +14,8 @@ fn main() {
     let mut world = World::new();
     let mut builder = DispatcherBuilder::new();
     let dm = DynamicManager::default();
-    //UserDeriveSystem::default().setup(&mut world, &mut builder, &dm);
-    //GuildDeriveSystem::default().setup(&mut world, &mut builder, &dm);
+    UserDeriveSystem::default().setup(&mut world, &mut builder, &dm);
+    GuildDeriveSystem::default().setup(&mut world, &mut builder, &dm);
     world.insert(dm);
     let mut dispatcher = builder.build();
     dispatcher.setup(&mut world);

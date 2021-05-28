@@ -1,11 +1,15 @@
+use convert_case::{Case, Casing};
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse_macro_input;
 use syn::{FnArg, ItemFn, Meta, NestedMeta, Type};
 
 #[proc_macro_attribute]
 pub fn system(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut item = parse_macro_input!(item as ItemFn);
+    let name = item.sig.ident.to_string();
+    let system_name = format_ident!("{}System", name.to_case(Case::UpperCamel));
+
     for attr in &item.attrs {
         match attr.path.get_ident() {
             Some(ident) if ident == "dynamic" => {
@@ -57,39 +61,45 @@ pub fn system(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
+    let lname = "native";
+    let fname = "test";
     let code = quote! {
-        /*
+
         #[derive(Default)]
         struct #system_name {
-            lib: DynamicSystem<fn(&UserInfo, &BagInfo)>,
+            lib: ecs_engine::DynamicSystem<fn(&UserInfo, &BagInfo)>,
         }
 
-        impl<'a> System<'a> for #system_name {
+        impl #system_name {
+            pub fn setup(mut self, world: &mut specs::World, builder: &mut specs::DispatcherBuilder, dm: &ecs_engine::DynamicManager) {
+                world.register::<UserInfo>();
+                world.register::<BagInfo>();
+                self.lib.init(#lname.into(), #fname.into(), dm);
+                builder.add(self, #name, &[]);
+            }
+        }
+
+        impl<'a> specs::System<'a> for #system_name {
             type SystemData = (
-                ReadStorage<'a, UserInfo>,
-                ReadStorage<'a, BagInfo>,
-                Read<'a, DynamicManager>,
+                specs::ReadStorage<'a, UserInfo>,
+                specs::ReadStorage<'a, BagInfo>,
+                specs::Read<'a, ecs_engine::DynamicManager>,
             );
 
             fn run(&mut self, (user, bag, dm): Self::SystemData) {
                 if let Some(symbol) = self.lib.get_symbol(&dm) {
                     for (user, bag) in (&user, &bag).join() {
-                        (*symbol)(user, bag);
+                        if let Err(err) = std::panic::catch_unwind(||{
+                            (*symbol)(user, bag);
+                        }) {
+                            todo!();
+                        }
                     }
                 } else {
-                    todo!()
+                    todo!();
                 }
             }
         }
-
-        pub fn #setup_func(world: &mut World, builder: &mut DispatcherBuilder, dm: &DynamicManager) {
-            world.register::<UserInfo>();
-            world.register::<BagInfo>();
-            let mut system = #system_name::default();
-            system.lib.init(#lname.into(), #fname.into(), dm);
-            builder.add(system, #system_name, &[]);
-        }
-         */
     };
     TokenStream::from(code)
 }
