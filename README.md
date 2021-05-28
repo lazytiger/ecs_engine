@@ -140,7 +140,7 @@
   ```
   其他更复杂的形式已经不是业务逻辑的范畴了，所以我们不在这里进行讨论，可以直接使用ecs底层代码来进行实现
 
-# 动态链接库管理
+## 动态链接库管理
 * DynamicManager作为resource为所有的system提供动态链接库支持，具体代码如下
 ```rust
 #[derive(Default)]
@@ -276,7 +276,7 @@ impl<T> DynamicSystem<T> {
 }
 ```
 
-# 数据同步
+## 数据同步
 * Mutable是一个wrapper，它用于将所有的具体类进行封装，当需要一个mut引用时，Mutable会自动记录该类型T对应的Storage已经被修改，同时将当前对象
   clone一份作为以后修改对比
 ```rust
@@ -365,3 +365,53 @@ where
     }
 }
 ```
+
+## system属性补充  
+关于各种目标的示例在上面已经讲过了，下面再补充一些其他的未涉及到的属性
+* resource
+```rust
+#[system]
+fn test(#[resource] counter:&usize, user:&UserInfo){}
+```
+这种属性会出现在参数变量前，代表这个参数是一个Resource而不是Component，要求这种类型都必须实现了Default接口
+* state
+```rust
+#[system]
+fn test(#[state] counter:&usize, user:&UserInfo){}
+```
+这种属性会出现在参数变量前，代表这个参数是当前System的成员变量，它作为一个状态提供给使用者
+* dynamic
+```rust
+#[system]
+#[dynamic(lib = "native", func = "test")]
+fn test1(user:&UserInfo){}
+```
+这是参数最全的一种方式，表明test1函数实际通过动态链接库来实现，system属性生成代码时会忽略掉这个函数目前的具体实现，也即test1将不会存在于编译完的
+代码中。而具体实现在叫native的动态链接库中，并且symbol的名字叫test
+
+```rust
+#[system]
+#[dynamic(lib = "xxx")]
+fn test2(user:&UserInfo){}
+```
+这是上面形式的一种省略形式，表示func默认就是test2
+
+```rust
+#[system]
+#[dynamic]
+fn user_test(user:&UserInfo){}
+```
+这是一种更省略的方式，代表lib=user, func = test，注意这种方式下，如果名字不带下划线，如test，则lib = test, func = test
+
+```rust
+#[system]
+fn test(user:&UserInfo){}
+```
+因为我们鼓励所有的system都是动态链接的，所以dynamic属性是默认的，如上代表lib = test, func = test
+* static
+```rust
+#[system]
+#[static]
+fn test(user:&UserInfo){}
+```
+代表这是一个静态实现，不要忽略test函数，将它编译成代码中，并且在System具体实现中调用它。
