@@ -11,6 +11,9 @@ specs = { version = "0.16", features = ["specs-derive"] }
 lazy_static = "1.4.0"
 libloading = "0.7.0"
 codegen = { path = "codegen" }
+log = "0.4"
+fern = "0.6"
+chrono = "0.4"
 
 [workspace]
 members = ["codegen"]

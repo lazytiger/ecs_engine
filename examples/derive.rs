@@ -10,7 +10,26 @@ fn user_derive(_user: &UserInfo, _bag: &BagInfo, #[state] _other: &usize) {}
 #[dynamic(lib = "guild", fn = "test")]
 fn guild_derive(_user: &UserInfo, _bag: &BagInfo, #[resource] _lazy_update: &LazyUpdate) {}
 
+fn setup_logger() -> Result<(), fern::InitError> {
+    fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "{}[{}:{}][{}]{}",
+                chrono::Local::now().format("[%Y-%m-%d %H:%M:%S%.6f]"),
+                record.file().unwrap_or("unknown"),
+                record.line().unwrap_or(0),
+                record.level(),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Trace)
+        .chain(std::io::stdout())
+        .apply()?;
+    Ok(())
+}
+
 fn main() {
+    setup_logger().unwrap();
     let mut world = World::new();
     let mut builder = DispatcherBuilder::new();
     let dm = DynamicManager::default();

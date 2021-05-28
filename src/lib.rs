@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, RwLock};
 
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
@@ -69,16 +69,17 @@ impl Library {
 
     pub fn reload(&mut self) {
         let name = libloading::library_filename(self.name.as_str());
-        if let Ok(lib) = unsafe { libloading::Library::new(name) } {
-            if let Some(olib) = self.lib.take() {
-                if let Err(err) = olib.close() {
-                    todo!()
+        match unsafe { libloading::Library::new(name) } {
+            Ok(lib) => {
+                if let Some(olib) = self.lib.take() {
+                    if let Err(err) = olib.close() {
+                        log::error!("close library `{}` failed with `{:?}`", self.name, err);
+                    }
+                    self.lib.replace(lib);
+                    self.generation += 1;
                 }
-                self.lib.replace(lib);
-                self.generation += 1;
             }
-        } else {
-            todo!()
+            Err(err) => log::error!("open library `{}` failed with `{:?}`", self.name, err),
         }
     }
 
@@ -94,9 +95,13 @@ pub struct DynamicManager {
 
 impl DynamicManager {
     pub fn get(&self, lib: &String) -> Arc<Library> {
-        if let Some(lib) = self.libraries.read().unwrap().get(lib) {
-            lib.clone()
-        } else {
+        {
+            if let Some(lib) = self.libraries.read().unwrap().get(lib) {
+                return lib.clone();
+            }
+        }
+
+        {
             let nlib = Arc::new(Library::new(lib.clone()));
             self.libraries
                 .write()
@@ -158,7 +163,7 @@ impl<T> DynamicSystem<T> {
         }
         self.lname = lname;
         self.fname = fname;
-        self.get_symbol(dm).unwrap();
+        self.get_symbol(dm);
     }
 }
 

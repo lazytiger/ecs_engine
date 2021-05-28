@@ -92,11 +92,11 @@ pub fn system(attr: TokenStream, item: TokenStream) -> TokenStream {
                         if let Err(err) = std::panic::catch_unwind(||{
                             (*symbol)(user, bag);
                         }) {
-                            todo!();
+                            log::error!("execute system {} failed with {:?}", #name, err);
                         }
                     }
                 } else {
-                    todo!();
+                    log::error!("symbol not found for system {}", #name);
                 }
             }
         }
