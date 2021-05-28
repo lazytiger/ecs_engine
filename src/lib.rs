@@ -8,9 +8,11 @@ use std::sync::{Arc, Mutex, RwLock};
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
+use specs::shred::DynamicSystemData;
 use specs::world::Index;
-use specs::BitSet;
+use specs::{BitSet, Join, System, WriteStorage};
 use specs::{Component, VecStorage};
+use std::marker::PhantomData;
 
 #[derive(Component)]
 #[storage(VecStorage)]
@@ -186,8 +188,20 @@ where
         &mut self.curr
     }
 
+    pub fn diff(&self) -> Vec<u8> {
+        todo!()
+    }
+}
+
+impl<T, const N: usize> Mutable<T, N> {
+    #[inline]
     pub fn modified() -> bool {
         MODS[N].load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn reset() {
+        MODS[N].store(false, Ordering::Relaxed);
     }
 }
 
@@ -201,4 +215,32 @@ lazy_static::lazy_static! {
         }
         mods
     };
+}
+
+pub struct CommitChangeSystem<T, const N: usize, const M: usize> {
+    counter: usize,
+    _phantom: PhantomData<T>,
+}
+
+impl<'a, T, const N: usize, const M: usize> System<'a> for CommitChangeSystem<T, N, M>
+where
+    Mutable<T, N>: Component,
+{
+    type SystemData = (WriteStorage<'a, Mutable<T, N>>,);
+
+    fn run(&mut self, (data,): Self::SystemData) {
+        self.counter += 1;
+        if self.counter != M {
+            return;
+        } else {
+            self.counter = 0;
+        }
+        if !Mutable::<T, N>::modified() {
+            return;
+        }
+        for (data,) in (&data,).join() {
+            todo!()
+        }
+        Mutable::<T, N>::reset();
+    }
 }
