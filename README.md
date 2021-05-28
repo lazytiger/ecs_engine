@@ -9,7 +9,12 @@
 ## 技术选型
 * ECS
     * 介绍
-        * 
+        * Entity
+        * Component
+        * System
+        * World
+        * Resource
+        * Scheduler
     * 优点
         * 游戏行业原生框架，适用性很高
         * 基于SOA，对于缓存友好，执行效率高
