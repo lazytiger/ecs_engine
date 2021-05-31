@@ -29,6 +29,24 @@
         * 执行效率高，从benchmarkgames上的数据来看，已经超过c++
         * 内存安全，不会因为业务逻辑代码的失误而使程序宕机
         * 线程安全，可以放心的使用多线程技术而不用担心竞争等问题
+        * 框架代码可以使用unsafe代码，尽可能的提高框架易用性，逻辑代码限定只能使用safe代码，让编译器帮忙检查所有潜在问题
+        ```rust
+        #![deny(unsafe_code)]
+        ```
+        * trait特性可以在struct定义之外再新加封装，只要所有的struct属性都是public的
+        ```rust
+        pub trait AddMoney {
+            fn add_money(&mut self, money:i32);
+        }
+     
+        impl AddMoney for UserInfo {
+            fn add_money(&mut self, money:i32) {
+                self.money += money;
+            }
+        }
+        ```
+        上面示例中UserInfo就是一个Component，由于逻辑与数据相分离，我们不会在Component的定义中添加add_money方法，而只会在其他的实现system
+        中添加新的方法。注意，一些公用方法除外，那些方法还是需要留在数据定义的地方。
     * 缺点
         * 学习成本高，学习曲线陡
         * 编译速度慢，影响开发迭代速度
@@ -149,7 +167,7 @@
     #[system(multi)]
     fn multi_target(user:&UserInfo, pos:&mut Position, scene:&mut Scene){}
     ```
-    这种类型其实也可以自动生成模板代码，大致如下：
+    这种类型其实也可以自动生成模板代码，利用par_join让所有的场景在单独线程并行执行，大致如下：
     ```rust
     impl<'a> System<'a> for EnterSceneSystem {
         type SystemData = (
