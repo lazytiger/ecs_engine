@@ -18,7 +18,20 @@
         * Scheduler 调度器，用于调度整个世界中系统的运行，根据指定的依赖关系以及对组件的访问需求进行自动协调，并发执行
     * 优点
         * 游戏行业原生框架，适用性很高
-        * 基于SOA，对于缓存友好，执行效率高
+        * 基于SOA(Structure of Array，对比Array Of Structure)，对于缓存友好，执行效率高
+          ```rust
+          struct SOA {
+              names:Vec<String>,
+              ages:Vec<u8>,   
+          }
+          
+          
+          struct AOS {
+              name:String,
+              age:u8,
+          }
+          static data:Vec<AOS> = Vec::new();
+          ```
         * 数据与逻辑相分离，为代码动态更新提供基础
         * 天然具有多线程工作能力
     * 缺点
