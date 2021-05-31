@@ -9,29 +9,33 @@ pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
 use specs::shred::DynamicSystemData;
+use specs::storage::UnprotectedStorage;
 use specs::world::Index;
 use specs::{BitSet, Join, System, WriteStorage};
 use specs::{Component, VecStorage};
+use std::any::Any;
 use std::marker::PhantomData;
 
-#[derive(Component)]
-#[storage(VecStorage)]
+#[derive(Clone, Default)]
 pub struct UserInfo {
     pub name: String,
     pub guild_id: Index,
 }
 
-#[derive(Component)]
-#[storage(VecStorage)]
+#[derive(Clone, Default)]
 pub struct GuildInfo {
     users: BitSet,
     pub name: String,
 }
 
-#[derive(Component)]
-#[storage(VecStorage)]
+#[derive(Clone, Default)]
 pub struct BagInfo {
     pub items: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+pub struct GuildMember {
+    pub role: u8,
 }
 
 pub struct Library {
@@ -167,7 +171,15 @@ impl<T> DynamicSystem<T> {
     }
 }
 
+pub enum MutableStatus {
+    Loaded,
+    Modified,
+    Created,
+    Deleted,
+}
+
 pub struct Mutable<T, const N: usize> {
+    status: MutableStatus,
     old: Option<T>,
     curr: T,
 }
@@ -185,6 +197,24 @@ where
     T: Clone,
     T: Default,
 {
+    pub fn new(t: T) -> Self {
+        Self {
+            old: None,
+            curr: t,
+            status: MutableStatus::Loaded,
+        }
+    }
+
+    pub fn create(mut self) -> Self {
+        self.status = MutableStatus::Created;
+        self
+    }
+
+    pub fn delete(mut self) -> Self {
+        self.status = MutableStatus::Deleted;
+        self
+    }
+
     pub fn get_mut(&mut self) -> &mut T {
         if let None = self.old {
             self.old.replace(self.curr.clone());
@@ -208,6 +238,13 @@ impl<T, const N: usize> Mutable<T, N> {
     pub fn reset() {
         MODS[N].store(false, Ordering::Relaxed);
     }
+}
+
+impl<T, const N: usize> Component for Mutable<T, N>
+where
+    T: 'static + Send + Sync,
+{
+    type Storage = VecStorage<Mutable<T, N>>;
 }
 
 pub const MAX_COMPONENTS: usize = 1024;
