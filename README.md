@@ -9,12 +9,13 @@
 ## 技术选型
 * ECS
     * 介绍
-        * Entity
-        * Component
-        * System
-        * World
-        * Resource
-        * Scheduler
+        * Entity 实体，实际就是一个标识，只是用于串联所有的Component，一般用一个正整数实现
+        * Component 组件，实际就是一组数据，这组数据一般来说会被同时访问或者修改，一个实体可以挂载多个组件
+        * System 系统，用于进行组件间进行交互，聚合一系列的组合并操作读写操作
+        * World 世界，统合整个ECS的最上层模块，实体，组件，系统都位于一个世界之中，世界内的组件都是互相可见的
+        * Resource 资源，整个世界内被共享的数据，同种类型数据在一个世界内只有一份，这与组件不同。
+        * Storage 存储，一类Component被一个Storage进行持有并存储，一般来说会有不同类型的Storage实现，同时Storage也是作为一种Resource存在的
+        * Scheduler 调度器，用于调度整个世界中系统的运行，根据指定的依赖关系以及对组件的访问需求进行自动协调，并发执行
     * 优点
         * 游戏行业原生框架，适用性很高
         * 基于SOA，对于缓存友好，执行效率高
@@ -143,6 +144,32 @@
   #[system(multi)]
   fn multi_target(user:&UserInfo, #[multi(users)] guild:&GuildInfo){}
   ```
+    还有一类是MMO相关场景操作，比如
+    ```rust
+    #[system(multi)]
+    fn multi_target(user:&UserInfo, pos:&mut Position, scene:&mut Scene){}
+    ```
+    这种类型其实也可以自动生成模板代码，大致如下：
+    ```rust
+    impl<'a> System<'a> for EnterSceneSystem {
+        type SystemData = (
+            ReadStorage<'a, DiffType<Fake<1>, 1>>,
+            WriteStorage<'a, DiffType<Fake<2>, 2>>,
+            WriteStorage<'a, Scene>,
+        );
+    
+        fn run(&mut self, (f1, mut f2, mut scene): Self::SystemData) {
+            (&scene, ).par_join().for_each(|(scene, )| {
+                for (f1, f2, _) in (&f1, &f2, &scene.players).join() {
+                    unsafe {
+                        #[allow(mutable_transmutes)]
+                            test_scene(f1, std::mem::transmute(f2), std::mem::transmute(scene));
+                    }
+                }
+            });
+        }
+    }
+    ```
   其他更复杂的形式已经不是业务逻辑的范畴了，所以我们不在这里进行讨论，可以直接使用ecs底层代码来进行实现
 
 ## 动态链接库管理
@@ -371,6 +398,12 @@ where
 }
 ```
 
+## 组件的创建
+* 初始直接全部创建，最简单，但是可能占用内存会稍高一些
+
+* 需要时再创建
+这种情况下，上面的函数应该需要有个返回值，如果有返回值则进行创建，或者直接用LazyUpdate来进行，这种方式的缺点在于组件只能在下一帧才能被访问到
+
 ## system属性补充  
 关于各种目标的示例在上面已经讲过了，下面再补充一些其他的未涉及到的属性
 * resource
@@ -420,3 +453,15 @@ fn test(user:&UserInfo){}
 fn test(user:&UserInfo){}
 ```
 代表这是一个静态实现，不要忽略test函数，将它编译成代码中，并且在System具体实现中调用它。
+
+# 其他关键模块
+## 网络层
+TBD
+
+## 数据层
+TBD
+
+# 典型应用场景实现
+## 背包
+## 工会
+## 大世界移动
