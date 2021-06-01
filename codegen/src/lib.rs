@@ -288,7 +288,6 @@ impl Config {
                 self.signature.ident.to_string().to_case(Case::UpperCamel)
             )
         };
-        eprintln!("system_name");
 
         let lib_name = if let Some(lib_name) = &self.lib_name {
             lib_name.clone()
@@ -298,7 +297,6 @@ impl Config {
                 self.signature.ident.span(),
             ))
         };
-        eprintln!("lib_name");
 
         let func_name = if let Some(func_name) = &self.func_name {
             func_name.clone()
@@ -308,7 +306,6 @@ impl Config {
                 self.signature.ident.span(),
             ))
         };
-        eprintln!("func_name");
 
         let mut components = Vec::new();
         let mut new_components = Vec::new();
@@ -332,7 +329,6 @@ impl Config {
             }
         }
 
-        eprintln!("quote now");
         let code = quote! {
             #[derive(Default)]
             struct #system_name {
