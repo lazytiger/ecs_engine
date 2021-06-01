@@ -16,6 +16,8 @@ use specs::{Component, VecStorage};
 use std::any::Any;
 use std::marker::PhantomData;
 
+pub mod network;
+
 #[derive(Clone, Default)]
 pub struct UserInfo {
     pub name: String,

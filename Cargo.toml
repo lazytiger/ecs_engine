@@ -14,6 +14,9 @@ codegen = { path = "codegen" }
 log = "0.4"
 fern = "0.6"
 chrono = "0.4"
+mio = { version = "0.7", features = ["net", "os-poll"] }
+slab = "0.4"
+rayon = "1.5"
 
 [workspace]
 members = ["codegen"]
