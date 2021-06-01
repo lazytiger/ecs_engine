@@ -17,7 +17,8 @@ lazy_static::lazy_static! {
 #[allow(mutable_transmutes)]
 fn get_component_index(name: &String) -> usize {
     unsafe {
-        let map: &mut HashMap<String, usize> = std::mem::transmute(&COMPONENT_INDEX_MAP);
+        let map: &HashMap<String, usize> = &COMPONENT_INDEX_MAP;
+        let map: &mut HashMap<String, usize> = std::mem::transmute(map);
         if let Some(index) = map.get(name) {
             *index
         } else {
@@ -287,18 +288,27 @@ impl Config {
                 self.signature.ident.to_string().to_case(Case::UpperCamel)
             )
         };
+        eprintln!("system_name");
 
         let lib_name = if let Some(lib_name) = &self.lib_name {
-            lit_to_ident(lib_name)
+            lib_name.clone()
         } else {
-            self.signature.ident.clone()
+            Lit::Str(LitStr::new(
+                self.signature.ident.to_string().as_str(),
+                self.signature.ident.span(),
+            ))
         };
+        eprintln!("lib_name");
 
         let func_name = if let Some(func_name) = &self.func_name {
-            lit_to_ident(func_name)
+            func_name.clone()
         } else {
-            self.signature.ident.clone()
+            Lit::Str(LitStr::new(
+                self.signature.ident.to_string().as_str(),
+                self.signature.ident.span(),
+            ))
         };
+        eprintln!("func_name");
 
         let mut components = Vec::new();
         let mut new_components = Vec::new();
@@ -309,27 +319,28 @@ impl Config {
             match param {
                 Parameter::Component(index, mutable) => {
                     let ty = self.signature.component_args[*index].clone();
-                    components.push(ty.clone());
                     let name = type_to_string(&ty);
+                    components.push(format_ident!("{}Mut", name));
                     if !component_exists(&name) {
                         new_indexes.push(get_component_index(&name));
                         new_index_names.push(format_ident!("{}Index", name));
                         new_mutable_names.push(format_ident!("{}Mut", name));
-                        new_components.push(name);
+                        new_components.push(format_ident!("{}", name));
                     }
                 }
                 _ => {}
             }
         }
 
+        eprintln!("quote now");
         let code = quote! {
             #[derive(Default)]
             struct #system_name {
                 lib: ecs_engine::DynamicSystem<fn(&UserInfo, &BagInfo)>,
             }
 
-            #(pub const #new_index_names :usize = #new_indexes)*;
-            #(pub type #new_mutable_names = Mutable<#new_components, #new_indexes>)*;
+            #(pub const #new_index_names :usize = #new_indexes;)*
+            #(pub type #new_mutable_names = ecs_engine::Mutable<#new_components, #new_indexes>;)*
 
             impl #system_name {
                 pub fn setup(mut self, world: &mut specs::World, builder: &mut specs::DispatcherBuilder, dm: &ecs_engine::DynamicManager) {
