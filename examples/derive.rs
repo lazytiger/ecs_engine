@@ -4,7 +4,7 @@ use specs::{DispatcherBuilder, Join, LazyUpdate, World, WorldExt};
 
 #[system]
 #[dynamic(user)]
-fn user_derive(_user: &UserInfo, _bag: &BagInfo, #[state] _other: &usize) {}
+fn user_derive(user: &UserInfo, bag: &BagInfo, #[state] other: &usize) {}
 
 #[system]
 //#[dynamic(lib = "guild", fn = "test")]

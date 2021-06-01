@@ -5,7 +5,7 @@ use convert_case::{Case, Casing};
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
-use syn::{parse_macro_input, Attribute, Generics, Signature, Visibility};
+use syn::{parse_macro_input, Attribute, Generics, Pat, Signature, Visibility};
 use syn::{FnArg, ItemFn, Lit, LitStr, Meta, NestedMeta, Type};
 
 lazy_static::lazy_static! {
@@ -61,6 +61,8 @@ enum Error {
         "system function parameters must be one of input, component, state and resource, no more no less"
     )]
     ConflictParameterAttribute,
+    #[error("component type should not use full path name")]
+    InvalidComponentType,
 }
 
 impl Error {
@@ -167,11 +169,14 @@ fn lit_to_ident(lit: &Lit) -> Ident {
     Ident::new(&name, span)
 }
 
-fn type_to_string(ty: &Type) -> String {
+fn component_type_to_string(ty: &Type) -> Result<String, Error> {
     match ty {
         Type::Path(path) => {
-            let len = path.path.segments.len();
-            path.path.segments[len - 1].ident.to_string()
+            if path.path.segments.len() > 1 || path.qself.is_some() {
+                Err(Error::InvalidComponentType)
+            } else {
+                Ok(path.path.segments[0].ident.to_string())
+            }
         }
         _ => panic!("not supported type"),
     }
@@ -312,11 +317,13 @@ impl Config {
         let mut new_indexes = Vec::new();
         let mut new_mutable_names = Vec::new();
         let mut new_index_names = Vec::new();
+        let mut state_names = Vec::new();
+        let mut states = Vec::new();
         for param in &self.signature.parameters {
             match param {
                 Parameter::Component(index, mutable) => {
                     let ty = self.signature.component_args[*index].clone();
-                    let name = type_to_string(&ty);
+                    let name = component_type_to_string(&ty)?;
                     components.push(format_ident!("{}Mut", name));
                     if !component_exists(&name) {
                         new_indexes.push(get_component_index(&name));
@@ -324,6 +331,11 @@ impl Config {
                         new_mutable_names.push(format_ident!("{}Mut", name));
                         new_components.push(format_ident!("{}", name));
                     }
+                }
+                Parameter::State(index, mutable) => {
+                    let (name, ty) = self.signature.state_args[*index].clone();
+                    state_names.push(name);
+                    states.push(ty);
                 }
                 _ => {}
             }
@@ -333,6 +345,7 @@ impl Config {
             #[derive(Default)]
             struct #system_name {
                 lib: ecs_engine::DynamicSystem<fn(&UserInfo, &BagInfo)>,
+                #(#state_names:#states,)*
             }
 
             #(pub const #new_index_names :usize = #new_indexes;)*
@@ -390,7 +403,7 @@ struct Sig {
     ident: Ident,
     generics: Generics,
     parameters: Vec<Parameter>,
-    state_args: Vec<Type>,
+    state_args: Vec<(Ident, Type)>,
     resource_args: Vec<Type>,
     component_args: Vec<Type>,
     input: Option<Type>,
@@ -418,7 +431,13 @@ impl Sig {
                             }
                             Some(ArgAttr::State) => {
                                 parameters.push(Parameter::State(state_args.len(), mutable));
-                                state_args.push(elem);
+                                match arg.pat.as_ref() {
+                                    Pat::Ident(ident) => {
+                                        eprintln!("{}", ident.ident);
+                                        state_args.push((ident.ident.clone(), elem))
+                                    }
+                                    _ => panic!("not supported pat"),
+                                }
                             }
                             Some(ArgAttr::Input) => {
                                 parameters.push(Parameter::Input);
