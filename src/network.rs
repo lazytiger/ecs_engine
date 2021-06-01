@@ -133,7 +133,9 @@ pub fn async_run(addr: SocketAddr) -> Sender<NetworkData> {
     let (sender, receiver) = channel();
     let r_sender = sender.clone();
     rayon::spawn(move || {
-        run(addr, sender, receiver);
+        if let Err(err) = run(addr, sender, receiver) {
+            log::error!("network thread quit with error:{}", err);
+        }
     });
     r_sender
 }

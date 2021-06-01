@@ -7,7 +7,7 @@ use specs::{DispatcherBuilder, Join, LazyUpdate, World, WorldExt};
 fn user_derive(_user: &UserInfo, _bag: &BagInfo, #[state] _other: &usize) {}
 
 #[system]
-#[dynamic(lib = "guild", fn = "test")]
+//#[dynamic(lib = "guild", fn = "test")]
 fn guild_derive(_user: &UserInfo, _bag: &BagInfo, #[resource] _lazy_update: &LazyUpdate) {}
 
 fn setup_logger() -> Result<(), fern::InitError> {

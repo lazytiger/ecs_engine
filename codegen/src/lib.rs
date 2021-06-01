@@ -6,7 +6,7 @@ use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{parse_macro_input, Attribute, Generics, Signature, Visibility};
-use syn::{FnArg, ItemFn, Lit, Meta, NestedMeta, Type};
+use syn::{FnArg, ItemFn, Lit, LitStr, Meta, NestedMeta, Type};
 
 lazy_static::lazy_static! {
     static ref COMPONENT_INDEX_MAP: HashMap<String, usize> = {
@@ -57,7 +57,7 @@ enum Error {
     #[error("system function parameters must be component references, state references or resource references")]
     InvalidArgument(Span),
     #[error(
-        "system function parameters must be one of component, state and resource, no more no less"
+        "system function parameters must be one of input, component, state and resource, no more no less"
     )]
     ConflictParameterAttribute,
 }
@@ -166,6 +166,16 @@ fn lit_to_ident(lit: &Lit) -> Ident {
     Ident::new(&name, span)
 }
 
+fn type_to_string(ty: &Type) -> String {
+    match ty {
+        Type::Path(path) => {
+            let len = path.path.segments.len();
+            path.path.segments[len - 1].ident.to_string()
+        }
+        _ => panic!("not supported type"),
+    }
+}
+
 impl Config {
     fn parse(attr: SystemAttr, item: &mut ItemFn) -> Result<Self, Error> {
         let mut to_remove = Vec::new();
@@ -221,7 +231,16 @@ impl Config {
 
     fn parse_dynamic_meta(meta: &Meta) -> Result<(Option<Lit>, Option<Lit>), Error> {
         let result = match meta {
-            Meta::Path(path) => return Err(Error::UnexpectedPathInDynamic),
+            Meta::Path(path) => {
+                let lit = if path.segments.len() > 0 {
+                    let ident = &path.segments[0].ident;
+                    let lit = Lit::Str(LitStr::new(ident.to_string().as_str(), ident.span()));
+                    Some(lit)
+                } else {
+                    None
+                };
+                (lit, None)
+            }
             Meta::List(items) => {
                 let mut lib_name = None;
                 let mut func_name = None;
@@ -253,7 +272,13 @@ impl Config {
         Ok(result)
     }
 
+    fn validate(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
     fn generate(&self) -> Result<proc_macro2::TokenStream, Error> {
+        self.validate()?;
+
         let system_name = if let Some(system_name) = &self.attr.system_name {
             lit_to_ident(system_name)
         } else {
@@ -275,19 +300,40 @@ impl Config {
             self.signature.ident.clone()
         };
 
+        let mut components = Vec::new();
+        let mut new_components = Vec::new();
+        let mut new_indexes = Vec::new();
+        let mut new_mutable_names = Vec::new();
+        let mut new_index_names = Vec::new();
+        for param in &self.signature.parameters {
+            match param {
+                Parameter::Component(index, mutable) => {
+                    let ty = self.signature.component_args[*index].clone();
+                    components.push(ty.clone());
+                    let name = type_to_string(&ty);
+                    if !component_exists(&name) {
+                        new_indexes.push(get_component_index(&name));
+                        new_index_names.push(format_ident!("{}Index", name));
+                        new_mutable_names.push(format_ident!("{}Mut", name));
+                        new_components.push(name);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let code = quote! {
             #[derive(Default)]
             struct #system_name {
                 lib: ecs_engine::DynamicSystem<fn(&UserInfo, &BagInfo)>,
             }
 
-            pub type UserInfoMut = Mutable<UserInfo, 1>;
-            pub type BagInfoMut = Mutable<BagInfo, 2>;
+            #(pub const #new_index_names :usize = #new_indexes)*;
+            #(pub type #new_mutable_names = Mutable<#new_components, #new_indexes>)*;
 
             impl #system_name {
                 pub fn setup(mut self, world: &mut specs::World, builder: &mut specs::DispatcherBuilder, dm: &ecs_engine::DynamicManager) {
-                    world.register::<UserInfo>();
-                    world.register::<BagInfo>();
+                    #(world.register::<#components>();)*
                     self.lib.init(#lib_name.into(), #func_name.into(), dm);
                     builder.add(self, #func_name, &[]);
                 }
@@ -322,12 +368,15 @@ impl Config {
 enum ArgAttr {
     Resource,
     State,
+    Input,
+    Component,
 }
 
 enum Parameter {
     Component(usize, bool),
     Resource(usize, bool),
     State(usize, bool),
+    Input,
 }
 
 struct Sig {
@@ -337,6 +386,7 @@ struct Sig {
     state_args: Vec<Type>,
     resource_args: Vec<Type>,
     component_args: Vec<Type>,
+    input: Option<Type>,
 }
 
 impl Sig {
@@ -345,6 +395,7 @@ impl Sig {
         let mut resource_args = Vec::new();
         let mut state_args = Vec::new();
         let mut component_args = Vec::new();
+        let mut input = None;
         for param in &mut item.inputs {
             match param {
                 syn::FnArg::Receiver(_) => return Err(Error::SelfNotAllowed),
@@ -361,6 +412,10 @@ impl Sig {
                             Some(ArgAttr::State) => {
                                 parameters.push(Parameter::State(state_args.len(), mutable));
                                 state_args.push(elem);
+                            }
+                            Some(ArgAttr::Input) => {
+                                parameters.push(Parameter::Input);
+                                input.replace(elem);
                             }
                             _ => {
                                 parameters
@@ -381,6 +436,7 @@ impl Sig {
             resource_args,
             state_args,
             component_args,
+            input,
         })
     }
 
@@ -397,6 +453,18 @@ impl Sig {
                 Some(ident) if ident == "state" => {
                     attributes.remove(i);
                     if attr.replace(ArgAttr::State).is_some() {
+                        return Err(Error::ConflictParameterAttribute);
+                    }
+                }
+                Some(ident) if ident == "input" => {
+                    attributes.remove(i);
+                    if attr.replace(ArgAttr::Input).is_some() {
+                        return Err(Error::ConflictParameterAttribute);
+                    }
+                }
+                Some(ident) if ident == "component" => {
+                    attributes.remove(i);
+                    if attr.replace(ArgAttr::Component).is_some() {
                         return Err(Error::ConflictParameterAttribute);
                     }
                 }
