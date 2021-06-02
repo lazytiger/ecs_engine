@@ -67,7 +67,7 @@ enum Error {
     #[error("only one input allowed in system")]
     MultipleInputFound,
     #[error("#[dynamic(\"lib\", \"func\")] is not allowed, use #[dynamic(lib = \"lib\", func = \"func\")] instead")]
-    LiteralFoundInDynamicAttribute,
+    LiteralFoundInDynamicAttribute(Span),
     #[error("invalid literal as identifier")]
     InvalidLiteralFoundForName(Span),
 }
@@ -79,6 +79,9 @@ impl Error {
             Error::InvalidKey(span) => *span,
             Error::InvalidArgument(span) => *span,
             Error::InvalidMetaForDynamic(span) => *span,
+            Error::InvalidComponentType(span) => *span,
+            Error::InvalidIdentifierForArgument(span) => *span,
+            Error::InvalidLiteralFoundForName(span) => *span,
             _ => Span::call_site(),
         }
     }
@@ -134,7 +137,7 @@ impl SystemAttr {
                     } = match item {
                         syn::NestedMeta::Meta(meta) => Self::parse_meta(&meta)?,
                         syn::NestedMeta::Lit(_) => {
-                            return Err(Error::LiteralFoundInDynamicAttribute)
+                            return Err(Error::LiteralFoundInDynamicAttribute(meta.span()))
                         }
                     };
                     if let Some(system_name) = system_name {
@@ -262,7 +265,9 @@ impl Config {
                 for item in &items.nested {
                     let (l, f) = match item {
                         syn::NestedMeta::Meta(meta) => Self::parse_dynamic_meta(meta)?,
-                        syn::NestedMeta::Lit(_) => panic!("unexpected literal"),
+                        syn::NestedMeta::Lit(_) => {
+                            return Err(Error::LiteralFoundInDynamicAttribute(meta.span()));
+                        }
                     };
                     if let Some(l) = l {
                         if lib_name.replace(l).is_some() {
