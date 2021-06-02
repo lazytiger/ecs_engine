@@ -23,6 +23,12 @@ fn guild_derive(
 ) {
 }
 
+#[system]
+#[statics]
+fn static_test(user: &UserInfo, #[resource] index: &mut usize) {
+    *index += 1;
+}
+
 fn setup_logger() -> Result<(), fern::InitError> {
     fern::Dispatch::new()
         .format(|out, message, record| {

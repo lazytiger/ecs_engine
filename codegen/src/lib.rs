@@ -236,7 +236,7 @@ impl Config {
         let mut func_name = None;
         for (i, attribute) in item.attrs.iter().enumerate() {
             if let Some(ident) = attribute.path.get_ident() {
-                if ident == "static" {
+                if ident == "statics" {
                     to_remove.push(i);
                     fstatic = true;
                 }
@@ -342,7 +342,7 @@ impl Config {
         Ok(())
     }
 
-    fn generate(&self) -> Result<proc_macro2::TokenStream, Error> {
+    fn generate(&self, input: ItemFn) -> Result<proc_macro2::TokenStream, Error> {
         self.validate()?;
 
         let system_name = if let Some(system_name) = &self.attr.system_name {
@@ -559,18 +559,19 @@ impl Config {
         } else {
             SystemType::Single
         };
-        let system_code = match system_type {
-            SystemType::Single => quote! {
-                impl<'a> specs::System<'a> for #system_name {
-                    type SystemData = (
-                        #(#system_data,)*
-                    );
 
-                    fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
-                        if let Some(symbol) = self.lib.get_symbol(&dm) {
-                            #(let mut #output_vectors = Vec::new();)*
+        let system_code = match system_type {
+            SystemType::Single => {
+                let func = if self.dynamic {
+                    quote!((*symbol))
+                } else {
+                    let symbol = self.signature.ident.clone();
+                    quote!(#symbol)
+                };
+                let run_code = quote! {
+                   #(let mut #output_vectors = Vec::new();)*
                             for (#(#foreach_names,)*) in (#(#join_names,)*).join() {
-                                let (#(#output_vnames),*) = (*symbol)(#(#func_names,)*);
+                                let (#(#output_vnames),*) = #func(#(#func_names,)*);
                                 #(if let Some(#output_vnames) = #output_vnames{
                                     #output_vectors.push((entity, #output_vnames));
                                 })*
@@ -582,19 +583,46 @@ impl Config {
                                     }
                                 }
                             )*
-                        } else {
+                };
+                let run_code = if self.dynamic {
+                    quote! {
+                       if let Some(symbol) = self.lib.get_symbol(&dm) {
+                            #run_code
+                       } else {
                             log::error!("symbol not found for system {}", #func_name);
                         }
                     }
+                } else {
+                    quote! {
+                        #run_code
+                    }
+                };
+                quote! {
+                    impl<'a> specs::System<'a> for #system_name {
+                        type SystemData = (
+                            #(#system_data,)*
+                        );
+
+                        fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
+                           #run_code
+                        }
+                    }
                 }
-            },
+            }
             SystemType::Double => quote!(),
             SystemType::Multiple => quote!(),
+        };
+
+        let func_code = if self.dynamic {
+            quote!()
+        } else {
+            quote!(#input)
         };
 
         Ok(quote! {
             #system_setup
             #system_code
+            #func_code
         })
     }
 }
@@ -862,7 +890,7 @@ pub fn system(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let result = attr
         .and_then(|attr| Config::parse(attr, &mut input))
-        .and_then(|config| config.generate());
+        .and_then(|config| config.generate(input));
     let code = match result {
         Ok(code) => code,
         Err(err) => err.emit(),
