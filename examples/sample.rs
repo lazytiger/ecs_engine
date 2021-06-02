@@ -1,16 +1,18 @@
 use specs::shred::DynamicSystemData;
 use specs::{
-    DispatcherBuilder, Entities, Join, Read, ReadStorage, System, World, WorldExt, WriteStorage,
+    DispatcherBuilder, Entities, Join, Read, ReadStorage, System, World, WorldExt, Write,
+    WriteStorage,
 };
 
 use ecs_engine::{
     BagInfo, DynamicManager, DynamicSystem, GuildInfo, GuildMember, Mutable, UserInfo,
 };
+use std::panic::catch_unwind;
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct UserTestSystem {
-    lib: DynamicSystem<fn(&UserInfo, &BagInfo)>,
+    lib: DynamicSystem<fn(&UserInfo, &BagInfo, &usize)>,
 }
 
 pub type UserInfoMut = Mutable<UserInfo, 1>;
@@ -35,12 +37,13 @@ impl<'a> System<'a> for UserTestSystem {
         ReadStorage<'a, UserInfoMut>,
         ReadStorage<'a, BagInfoMut>,
         Read<'a, DynamicManager>,
+        Write<'a, usize>,
     );
 
-    fn run(&mut self, (user, bag, dm): Self::SystemData) {
+    fn run(&mut self, (user, bag, dm, mut size): Self::SystemData) {
         if let Some(symbol) = self.lib.get_symbol(&dm) {
             for (user, bag) in (&user, &bag).join() {
-                (*symbol)(user, bag);
+                (*symbol)(user, bag, &mut size);
             }
         } else {
             log::error!("symbol not found");

@@ -5,9 +5,12 @@ use convert_case::{Case, Casing};
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
+use syn::buffer::TokenBuffer;
 use syn::spanned::Spanned;
-use syn::{parse_macro_input, Attribute, Generics, Pat, Signature, Visibility};
-use syn::{FnArg, ItemFn, Lit, LitStr, Meta, NestedMeta, Type};
+use syn::{
+    parse_macro_input, Attribute, Generics, Pat, ReturnType, Signature, TypePath, Visibility,
+};
+use syn::{parse_quote, FnArg, ItemFn, Lit, LitStr, Meta, NestedMeta, Type};
 
 lazy_static::lazy_static! {
     static ref COMPONENT_INDEX_MAP: HashMap<String, usize> = {
@@ -333,61 +336,121 @@ impl Config {
         let mut new_index_names = Vec::new();
         let mut state_names = Vec::new();
         let mut states = Vec::new();
+        let mut system_data = Vec::new();
+        let mut inputs = Vec::new();
+        let mut input_names = Vec::new();
+        let mut func_names = Vec::new();
+        let mut join_names = Vec::new();
+        let mut foreach_names = Vec::new();
         for param in &self.signature.parameters {
             match param {
-                Parameter::Component(name, index, mutable) => {
+                Parameter::Component(vname, index, mutable) => {
                     let ty = self.signature.component_args[*index].clone();
                     let name = component_type_to_string(&ty)?;
-                    components.push(format_ident!("{}Mut", name));
+                    let mut_ident = format_ident!("{}Mut", name);
+                    components.push(mut_ident.clone());
                     if !component_exists(&name) {
                         new_indexes.push(get_component_index(&name));
                         new_index_names.push(format_ident!("{}Index", name));
-                        new_mutable_names.push(format_ident!("{}Mut", name));
+                        new_mutable_names.push(mut_ident.clone());
                         new_components.push(format_ident!("{}", name));
                     }
+                    let data = if *mutable {
+                        quote!(specs::WriteStorage<'a, #mut_ident>)
+                    } else {
+                        quote!(specs::ReadStorage<'a, #mut_ident>)
+                    };
+                    system_data.push(data);
+                    func_names.push(quote!(#vname));
+                    foreach_names.push(vname.clone());
+                    if *mutable {
+                        join_names.push(quote!(&mut #vname));
+                        input_names.push(quote!(mut #vname));
+                        inputs.push(quote!(&mut #mut_ident));
+                    } else {
+                        join_names.push(quote!(&#vname));
+                        input_names.push(quote!(#vname));
+                        inputs.push(quote!(&#ty));
+                    }
                 }
-                Parameter::State(name, index, mutable) => {
+                Parameter::State(vname, index, mutable) => {
                     let ty = self.signature.state_args[*index].clone();
-                    state_names.push(name);
-                    states.push(ty);
+                    state_names.push(vname.clone());
+                    states.push(ty.clone());
+                    if *mutable {
+                        func_names.push(quote!(&mut self.#vname));
+                        inputs.push(quote!(&mut #ty));
+                    } else {
+                        func_names.push(quote!(&self.#vname));
+                        inputs.push(quote!(&#ty));
+                    }
                 }
-                _ => {}
+                Parameter::Resource(vname, index, mutable) => {
+                    let ty = self.signature.resource_args[*index].clone();
+                    let data = if *mutable {
+                        quote!(specs::Write<'a, #ty>)
+                    } else {
+                        quote!(specs::Read<'a, #ty>)
+                    };
+                    system_data.push(data);
+                    if *mutable {
+                        func_names.push(quote!(&mut #vname));
+                        input_names.push(quote!(mut #vname));
+                        inputs.push(quote!(&mut #ty));
+                    } else {
+                        func_names.push(quote!(&#vname));
+                        input_names.push(quote!(#vname));
+                        inputs.push(quote!(&#ty));
+                    }
+                }
+                Parameter::Input(vname) => {
+                    if let Some(input) = &self.signature.input {
+                        inputs.push(quote!(&input));
+                        join_names.push(quote!(&#vname));
+                        func_names.push(quote!(&#vname));
+                        foreach_names.push(vname.clone());
+                    }
+                }
             }
         }
 
-        let code = quote! {
+        let dynamic_init = if self.dynamic {
+            system_data.push(quote!(specs::Read<'a, ecs_engine::DynamicManager>));
+            state_names.push(format_ident!("lib"));
+            states.push(parse_quote!(ecs_engine::DynamicSystem<fn(#(#inputs,)*)>));
+            input_names.push(quote!(dm));
+            quote!(self.lib.init(#lib_name.into(), #func_name.into(), dm);)
+        } else {
+            quote!()
+        };
+
+        let system_setup = quote! {
             #[derive(Default)]
             struct #system_name {
-                lib: ecs_engine::DynamicSystem<fn(&UserInfo, &BagInfo)>,
                 #(#state_names:#states,)*
             }
 
             #(pub const #new_index_names :usize = #new_indexes;)*
             #(pub type #new_mutable_names = ecs_engine::Mutable<#new_components, #new_indexes>;)*
-
             impl #system_name {
-                pub fn setup(mut self, world: &mut specs::World, builder: &mut specs::DispatcherBuilder, dm: &ecs_engine::DynamicManager) {
-                    #(world.register::<#components>();)*
-                    self.lib.init(#lib_name.into(), #func_name.into(), dm);
-                    builder.add(self, #func_name, &[]);
+                    pub fn setup(mut self, world: &mut specs::World, builder: &mut specs::DispatcherBuilder, dm: &ecs_engine::DynamicManager) {
+                        #(world.register::<#components>();)*
+                        #dynamic_init
+                        builder.add(self, #func_name, &[]);
+                    }
                 }
-            }
+        };
 
+        let system_code = quote! {
             impl<'a> specs::System<'a> for #system_name {
                 type SystemData = (
-                    specs::ReadStorage<'a, UserInfoMut>,
-                    specs::ReadStorage<'a, BagInfoMut>,
-                    specs::Read<'a, ecs_engine::DynamicManager>,
+                    #(#system_data,)*
                 );
 
-                fn run(&mut self, (user, bag, dm): Self::SystemData) {
+                fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
                     if let Some(symbol) = self.lib.get_symbol(&dm) {
-                        for (user, bag) in (&user, &bag).join() {
-                            if let Err(err) = std::panic::catch_unwind(||{
-                                (*symbol)(user, bag);
-                            }) {
-                                log::error!("execute system {} failed with {:?}", #func_name, err);
-                            }
+                        for (#(#foreach_names,)*) in (#(#join_names,)*).join() {
+                            (*symbol)(#(#func_names,)*);
                         }
                     } else {
                         log::error!("symbol not found for system {}", #func_name);
@@ -395,7 +458,10 @@ impl Config {
                 }
             }
         };
-        Ok(code)
+        Ok(quote! {
+            #system_setup
+            #system_code
+        })
     }
 }
 
@@ -421,6 +487,7 @@ struct Sig {
     resource_args: Vec<Type>,
     component_args: Vec<Type>,
     input: Option<Type>,
+    return_type: ReturnType,
 }
 
 impl Sig {
@@ -490,6 +557,7 @@ impl Sig {
             state_args,
             component_args,
             input,
+            return_type: item.output.clone(),
         })
     }
 
