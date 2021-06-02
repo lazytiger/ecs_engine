@@ -4,12 +4,11 @@ use convert_case::{Case, Casing};
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
-use syn::buffer::TokenBuffer;
-use syn::spanned::Spanned;
+
 use syn::{
-    parse_macro_input, Attribute, Generics, Pat, ReturnType, Signature, TypePath, Visibility,
+    parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, Generics, ItemFn, Lit,
+    LitStr, Meta, NestedMeta, Pat, ReturnType, Signature, Type, Visibility,
 };
-use syn::{parse_quote, FnArg, ItemFn, Lit, LitStr, Meta, NestedMeta, Type};
 
 lazy_static::lazy_static! {
     static ref COMPONENT_INDEX_MAP: HashMap<String, usize> = {
@@ -214,7 +213,7 @@ impl Config {
                     to_remove.push(i);
                     let meta = attribute
                         .parse_meta()
-                        .map_err(|err| Error::InvalidMetaForDynamic(ident.span()))?;
+                        .map_err(|_err| Error::InvalidMetaForDynamic(ident.span()))?;
                     let (l, f) = Self::parse_dynamic_meta(&meta)?;
                     if let Some(l) = l {
                         if lib_name.replace(l).is_some() {
@@ -403,7 +402,7 @@ impl Config {
                     }
                 }
                 Parameter::Input(vname) => {
-                    if let Some(input) = &self.signature.input {
+                    if let Some(_input) = &self.signature.input {
                         inputs.push(quote!(&input));
                         join_names.push(quote!(&#vname));
                         func_names.push(quote!(&#vname));
@@ -618,7 +617,7 @@ pub fn system(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let result = attr
         .and_then(|attr| Config::parse(attr, &mut input))
-        .and_then(|mut config| config.generate());
+        .and_then(|config| config.generate());
     let code = match result {
         Ok(code) => code,
         Err(err) => err.emit(),

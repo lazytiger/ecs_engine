@@ -1,14 +1,15 @@
-use specs::shred::DynamicSystemData;
 use specs::{
-    DispatcherBuilder, Entities, Join, Read, ReadStorage, System, World, WorldExt, Write,
-    WriteStorage,
+    shred::DynamicSystemData, DispatcherBuilder, Entities, Join, Read, ReadStorage, System, World,
+    WorldExt, Write, WriteStorage,
 };
 
 use ecs_engine::{
     BagInfo, DynamicManager, DynamicSystem, GuildInfo, GuildMember, Mutable, UserInfo,
 };
-use std::panic::catch_unwind;
-use std::sync::{Arc, Mutex};
+use std::{
+    panic::catch_unwind,
+    sync::{Arc, Mutex},
+};
 
 #[derive(Default)]
 struct UserTestSystem {

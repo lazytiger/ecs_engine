@@ -1,12 +1,15 @@
-use mio::event::Event;
-use mio::net::{TcpListener, TcpSocket, TcpStream};
-use mio::{Events, Interest, Poll, Registry, Token};
+use mio::{
+    event::Event,
+    net::{TcpListener, TcpSocket, TcpStream},
+    Events, Interest, Poll, Registry, Token,
+};
 use slab::Slab;
 use specs::world::Index;
-use std::io::{ErrorKind, Result};
-use std::net::SocketAddr;
-use std::sync::mpsc::Sender;
-use std::sync::mpsc::{channel, Receiver};
+use std::{
+    io::{ErrorKind, Result},
+    net::SocketAddr,
+    sync::mpsc::{channel, Receiver, Sender},
+};
 
 struct Connection {
     stream: TcpStream,

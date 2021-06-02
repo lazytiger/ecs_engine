@@ -1,20 +1,21 @@
-use std::collections::HashMap;
-use std::ops::Deref;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::HashMap,
+    ops::Deref,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
+};
 
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
-use specs::shred::DynamicSystemData;
-use specs::storage::UnprotectedStorage;
-use specs::world::Index;
-use specs::{BitSet, Join, System, WriteStorage};
-use specs::{Component, VecStorage};
-use std::any::Any;
-use std::marker::PhantomData;
+use specs::{
+    shred::DynamicSystemData, storage::UnprotectedStorage, world::Index, BitSet, Component, Join,
+    System, VecStorage, WriteStorage,
+};
+use std::{any::Any, marker::PhantomData};
 
 pub mod network;
 
