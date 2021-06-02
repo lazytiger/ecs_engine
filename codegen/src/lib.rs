@@ -7,7 +7,7 @@ use quote::{format_ident, quote, quote_spanned};
 
 use syn::{
     parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, Generics, ItemFn, Lit,
-    LitStr, Meta, NestedMeta, Pat, ReturnType, Signature, Type, Visibility,
+    LitStr, Meta, NestedMeta, Pat, ReturnType, Signature, Type, TypePath, Visibility,
 };
 
 lazy_static::lazy_static! {
@@ -71,6 +71,8 @@ enum Error {
     LiteralFoundInDynamicAttribute(Span),
     #[error("invalid literal as identifier")]
     InvalidLiteralFoundForName(Span),
+    #[error("Entity type cannot be mutable, remove &mut")]
+    EntityCantBeMutable(Span),
 }
 
 impl Error {
@@ -83,6 +85,7 @@ impl Error {
             Error::InvalidComponentType(span) => *span,
             Error::InvalidIdentifierForArgument(span) => *span,
             Error::InvalidLiteralFoundForName(span) => *span,
+            Error::EntityCantBeMutable(span) => *span,
             _ => Span::call_site(),
         }
     }
@@ -409,6 +412,14 @@ impl Config {
                         foreach_names.push(vname.clone());
                     }
                 }
+                Parameter::Entity(vname) => {
+                    join_names.push(quote!(&#vname));
+                    input_names.push(quote!(#vname));
+                    inputs.push(quote!(&specs::Entity));
+                    system_data.push(quote!(specs::Entities<'a>));
+                    foreach_names.push(vname.clone());
+                    func_names.push(quote!(&#vname));
+                }
             }
         }
 
@@ -485,6 +496,7 @@ enum Parameter {
     Resource(Ident, usize, bool),
     State(Ident, usize, bool),
     Input(Ident),
+    Entity(Ident),
 }
 
 struct Sig {
@@ -516,7 +528,7 @@ impl Sig {
                     match arg.ty.as_ref() {
                         Type::Reference(ty) => {
                             let mutable = ty.mutability.is_some();
-                            let elem = ty.elem.as_ref().clone();
+                            let elem = ty.elem.as_ref();
                             let attribute = Self::find_remove_arg_attr(&mut arg.attrs)?;
                             match attribute {
                                 Some(ArgAttr::Resource) => {
@@ -525,7 +537,7 @@ impl Sig {
                                         resource_args.len(),
                                         mutable,
                                     ));
-                                    resource_args.push(elem);
+                                    resource_args.push(elem.clone());
                                 }
                                 Some(ArgAttr::State) => {
                                     parameters.push(Parameter::State(
@@ -533,21 +545,28 @@ impl Sig {
                                         state_args.len(),
                                         mutable,
                                     ));
-                                    state_args.push(elem)
+                                    state_args.push(elem.clone())
                                 }
                                 Some(ArgAttr::Input) => {
                                     parameters.push(Parameter::Input(name));
-                                    if input.replace(elem).is_some() {
+                                    if input.replace(elem.clone()).is_some() {
                                         return Err(Error::MultipleInputFound);
                                     }
                                 }
                                 _ => {
-                                    parameters.push(Parameter::Component(
-                                        name,
-                                        component_args.len(),
-                                        mutable,
-                                    ));
-                                    component_args.push(elem);
+                                    if is_entity(elem) {
+                                        if mutable {
+                                            return Err(Error::EntityCantBeMutable(arg.span()));
+                                        }
+                                        parameters.push(Parameter::Entity(name));
+                                    } else {
+                                        parameters.push(Parameter::Component(
+                                            name,
+                                            component_args.len(),
+                                            mutable,
+                                        ));
+                                    }
+                                    component_args.push(elem.clone());
                                 }
                             }
                         }
@@ -602,6 +621,27 @@ impl Sig {
         }
         Ok(attr)
     }
+}
+
+fn is_type(ty: &Type, segments: &[&str]) -> bool {
+    if let Type::Path(path) = ty {
+        path_match(path, segments)
+    } else {
+        false
+    }
+}
+
+fn path_match(path: &TypePath, segments: &[&str]) -> bool {
+    segments
+        .iter()
+        .zip(path.path.segments.iter())
+        .all(|(a, b)| b.ident == *a)
+}
+
+fn is_entity(ty: &Type) -> bool {
+    is_type(ty, &["Entity"])
+        || is_type(ty, &["specs", "Entity"])
+        || is_type(ty, &["specs", "world", "Entity"])
 }
 
 #[proc_macro_attribute]

@@ -1,6 +1,6 @@
 use codegen::system;
 use ecs_engine::{BagInfo, DynamicManager, UserInfo};
-use specs::{DispatcherBuilder, Join, LazyUpdate, World, WorldExt};
+use specs::{DispatcherBuilder, Entity, Join, LazyUpdate, World, WorldExt};
 
 #[system]
 #[dynamic(user)]
@@ -14,7 +14,13 @@ fn user_derive(
 
 #[system]
 #[dynamic(lib = "guild", func = "test")]
-fn guild_derive(user: &UserInfo, bag: &BagInfo, #[resource] lazy_update: &LazyUpdate) {}
+fn guild_derive(
+    entity: &Entity,
+    user: &UserInfo,
+    bag: &BagInfo,
+    #[resource] lazy_update: &LazyUpdate,
+) {
+}
 
 fn setup_logger() -> Result<(), fern::InitError> {
     fern::Dispatch::new()
