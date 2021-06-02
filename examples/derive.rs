@@ -14,7 +14,7 @@ fn user_derive(
 
 #[system]
 #[dynamic(lib = "guild", func = "test")]
-fn guild_derive(_user: &UserInfo, _bag: &BagInfo, #[resource] _lazy_update: &LazyUpdate) {}
+fn guild_derive(user: &UserInfo, bag: &BagInfo, #[resource] lazy_update: &LazyUpdate) {}
 
 fn setup_logger() -> Result<(), fern::InitError> {
     fern::Dispatch::new()

@@ -1,4 +1,3 @@
-use std::alloc::System;
 use std::collections::HashMap;
 
 use convert_case::{Case, Casing};
@@ -441,23 +440,33 @@ impl Config {
                 }
         };
 
-        let system_code = quote! {
-            impl<'a> specs::System<'a> for #system_name {
-                type SystemData = (
-                    #(#system_data,)*
-                );
+        let system_type = if let Some(system_type) = self.attr.system_type {
+            system_type
+        } else {
+            SystemType::Single
+        };
+        let system_code = match system_type {
+            SystemType::Single => quote! {
+                impl<'a> specs::System<'a> for #system_name {
+                    type SystemData = (
+                        #(#system_data,)*
+                    );
 
-                fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
-                    if let Some(symbol) = self.lib.get_symbol(&dm) {
-                        for (#(#foreach_names,)*) in (#(#join_names,)*).join() {
-                            (*symbol)(#(#func_names,)*);
+                    fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
+                        if let Some(symbol) = self.lib.get_symbol(&dm) {
+                            for (#(#foreach_names,)*) in (#(#join_names,)*).join() {
+                                (*symbol)(#(#func_names,)*);
+                            }
+                        } else {
+                            log::error!("symbol not found for system {}", #func_name);
                         }
-                    } else {
-                        log::error!("symbol not found for system {}", #func_name);
                     }
                 }
-            }
+            },
+            SystemType::Double => quote!(),
+            SystemType::Multiple => quote!(),
         };
+
         Ok(quote! {
             #system_setup
             #system_code
