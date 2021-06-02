@@ -11,6 +11,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+pub type UserTestFn = fn(&UserInfo, &BagInfo, &usize);
+
+fn test(a: &UserInfo, b: &BagInfo, c: &usize) {}
+
+static _test: UserTestFn = test;
+
 #[derive(Default)]
 struct UserTestSystem {
     lib: DynamicSystem<fn(&UserInfo, &BagInfo, &usize)>,

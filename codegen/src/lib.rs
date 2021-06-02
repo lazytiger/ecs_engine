@@ -353,6 +353,7 @@ impl Config {
                 self.signature.ident.to_string().to_case(Case::UpperCamel)
             )
         };
+        let system_fn = format_ident!("{}Fn", system_name);
 
         let lib_name = if let Some(lib_name) = &self.lib_name {
             lib_name.clone()
@@ -528,16 +529,22 @@ impl Config {
         let dynamic_init = if self.dynamic {
             system_data.push(quote!(specs::Read<'a, ecs_engine::DynamicManager>));
             state_names.push(format_ident!("lib"));
-            states.push(
-                parse_quote!(ecs_engine::DynamicSystem<fn(#(#fn_inputs,)*) ->(#(#fn_outputs),*)>),
-            );
+            states.push(parse_quote!(ecs_engine::DynamicSystem<#system_fn>));
             input_names.push(quote!(dm));
             quote!(self.lib.init(#lib_name.into(), #func_name.into(), dm);)
         } else {
             quote!()
         };
 
+        let dynamic_fn = if self.dynamic {
+            quote!(pub type #system_fn = fn(#(#fn_inputs,)*) ->(#(#fn_outputs),*);)
+        } else {
+            quote!()
+        };
+
         let system_setup = quote! {
+            #dynamic_fn
+
             #[derive(Default)]
             pub struct #system_name {
                 #(#state_names:#states,)*
