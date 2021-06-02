@@ -6,8 +6,9 @@ use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
 
 use syn::{
-    parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, Generics, ItemFn, Lit,
-    LitStr, Meta, NestedMeta, Pat, ReturnType, Signature, Type, TypePath, Visibility,
+    parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, GenericArgument, Generics,
+    ItemFn, Lit, LitStr, Meta, NestedMeta, Pat, PathArguments, ReturnType, Signature, Type,
+    TypePath, Visibility,
 };
 
 lazy_static::lazy_static! {
@@ -73,6 +74,10 @@ enum Error {
     InvalidLiteralFoundForName(Span),
     #[error("Entity type cannot be mutable, remove &mut")]
     EntityCantBeMutable(Span),
+    #[error(
+        "invalid return type only Option<Component> or tuple of Option<Component> is accepted"
+    )]
+    InvalidReturnType(Span),
 }
 
 impl Error {
@@ -86,6 +91,7 @@ impl Error {
             Error::InvalidIdentifierForArgument(span) => *span,
             Error::InvalidLiteralFoundForName(span) => *span,
             Error::EntityCantBeMutable(span) => *span,
+            Error::InvalidReturnType(span) => *span,
             _ => Span::call_site(),
         }
     }
@@ -169,7 +175,6 @@ impl SystemAttr {
 
 struct Config {
     attr: SystemAttr,
-    visibility: Visibility,
     dynamic: bool,
     lib_name: Option<Lit>,
     func_name: Option<Lit>,
@@ -239,11 +244,11 @@ impl Config {
             item.attrs.remove(i);
         }
 
-        let signature = Sig::parse(&mut item.sig)?;
+        let mut signature = Sig::parse(&mut item.sig)?;
+        signature.generate_output_names();
 
         Ok(Self {
             attr,
-            visibility: item.vis.clone(),
             dynamic,
             lib_name,
             func_name,
@@ -330,49 +335,75 @@ impl Config {
             ))
         };
 
+        // all components should be registered
         let mut components = Vec::new();
+        // all components had not been defined
         let mut new_components = Vec::new();
+        // index for all components had not been defined
         let mut new_indexes = Vec::new();
+        // alias name for all components had not been defined
         let mut new_mutable_names = Vec::new();
+        // alias index name for all components had not been defined
         let mut new_index_names = Vec::new();
+        // field names
         let mut state_names = Vec::new();
+        // field types
         let mut states = Vec::new();
+        // SystemData types
         let mut system_data = Vec::new();
-        let mut inputs = Vec::new();
+        // function input types
+        let mut fn_inputs = Vec::new();
+        // function output types
+        let mut fn_outputs = Vec::new();
+        // function output names
+        let mut output_vnames = Vec::new();
+        // Mutable alias types for output type
+        let mut output_types = Vec::new();
+        // storage names for output types
+        let mut output_snames = Vec::new();
+        // vector names for output
+        let mut output_vectors = Vec::new();
+        // names for all input parameters
         let mut input_names = Vec::new();
+        // names for all function input parameters
         let mut func_names = Vec::new();
+        // names for join
         let mut join_names = Vec::new();
+        // names for foreach
         let mut foreach_names = Vec::new();
+
         for param in &self.signature.parameters {
             match param {
                 Parameter::Component(vname, index, mutable) => {
                     let ty = self.signature.component_args[*index].clone();
-                    let name = component_type_to_string(&ty)?;
-                    let mut_ident = format_ident!("{}Mut", name);
+                    let tname = component_type_to_string(&ty)?;
+                    let mut_ident = format_ident!("{}Mut", tname);
                     components.push(mut_ident.clone());
-                    if !component_exists(&name) {
-                        new_indexes.push(get_component_index(&name));
-                        new_index_names.push(format_ident!("{}Index", name));
+                    if !component_exists(&tname) {
+                        new_indexes.push(get_component_index(&tname));
+                        new_index_names.push(format_ident!("{}Index", tname));
                         new_mutable_names.push(mut_ident.clone());
-                        new_components.push(format_ident!("{}", name));
+                        new_components.push(format_ident!("{}", tname));
                     }
-                    let data = if *mutable {
-                        quote!(specs::WriteStorage<'a, #mut_ident>)
-                    } else {
-                        quote!(specs::ReadStorage<'a, #mut_ident>)
-                    };
-                    system_data.push(data);
                     func_names.push(quote!(#vname));
+                    let jname = format_ident!("j{}", vname);
                     foreach_names.push(vname.clone());
                     if *mutable {
-                        join_names.push(quote!(&mut #vname));
-                        input_names.push(quote!(mut #vname));
-                        inputs.push(quote!(&mut #mut_ident));
+                        join_names.push(quote!(&mut #jname));
+                        fn_inputs.push(quote!(&mut #mut_ident));
                     } else {
-                        join_names.push(quote!(&#vname));
-                        input_names.push(quote!(#vname));
-                        inputs.push(quote!(&#ty));
+                        join_names.push(quote!(&#jname));
+                        fn_inputs.push(quote!(&#ty));
                     }
+                    if *mutable || self.signature.is_return_type(&ty) {
+                        let data = quote!(specs::WriteStorage<'a, #mut_ident>);
+                        system_data.push(data);
+                        input_names.push(quote!(mut #jname));
+                    } else {
+                        let data = quote!(specs::ReadStorage<'a, #mut_ident>);
+                        system_data.push(data);
+                        input_names.push(quote!(#jname));
+                    };
                 }
                 Parameter::State(vname, index, mutable) => {
                     let ty = self.signature.state_args[*index].clone();
@@ -380,10 +411,10 @@ impl Config {
                     states.push(ty.clone());
                     if *mutable {
                         func_names.push(quote!(&mut self.#vname));
-                        inputs.push(quote!(&mut #ty));
+                        fn_inputs.push(quote!(&mut #ty));
                     } else {
                         func_names.push(quote!(&self.#vname));
-                        inputs.push(quote!(&#ty));
+                        fn_inputs.push(quote!(&#ty));
                     }
                 }
                 Parameter::Resource(vname, index, mutable) => {
@@ -397,25 +428,27 @@ impl Config {
                     if *mutable {
                         func_names.push(quote!(&mut #vname));
                         input_names.push(quote!(mut #vname));
-                        inputs.push(quote!(&mut #ty));
+                        fn_inputs.push(quote!(&mut #ty));
                     } else {
                         func_names.push(quote!(&#vname));
                         input_names.push(quote!(#vname));
-                        inputs.push(quote!(&#ty));
+                        fn_inputs.push(quote!(&#ty));
                     }
                 }
                 Parameter::Input(vname) => {
-                    if let Some(_input) = &self.signature.input {
-                        inputs.push(quote!(&input));
-                        join_names.push(quote!(&#vname));
+                    if let Some(input) = &self.signature.input {
+                        fn_inputs.push(quote!(#input));
+                        let jname = format_ident!("j{}", vname);
+                        join_names.push(quote!(&#jname));
                         func_names.push(quote!(&#vname));
                         foreach_names.push(vname.clone());
                     }
                 }
                 Parameter::Entity(vname) => {
-                    join_names.push(quote!(&#vname));
-                    input_names.push(quote!(#vname));
-                    inputs.push(quote!(&specs::Entity));
+                    let jname = format_ident!("j{}", vname);
+                    join_names.push(quote!(&#jname));
+                    input_names.push(quote!(#jname));
+                    fn_inputs.push(quote!(&specs::Entity));
                     system_data.push(quote!(specs::Entities<'a>));
                     foreach_names.push(vname.clone());
                     func_names.push(quote!(&#vname));
@@ -423,10 +456,44 @@ impl Config {
             }
         }
 
+        for (i, typ) in self.signature.outputs.iter().enumerate() {
+            let vname = &self.signature.output_names[i];
+            let tname = component_type_to_string(&typ)?;
+            let mut_ident = format_ident!("{}Mut", tname);
+            if vname.to_string().starts_with('o') {
+                if !component_exists(&tname) {
+                    new_indexes.push(get_component_index(&tname));
+                    new_index_names.push(format_ident!("{}Index", tname));
+                    new_mutable_names.push(mut_ident.clone());
+                    new_components.push(format_ident!("{}", tname));
+                }
+                system_data.push(quote!(WriteStorage<'a, #typ>));
+                input_names.push(quote!(mut vname));
+                output_snames.push(vname.clone());
+            } else {
+                output_snames.push(format_ident!("j{}", vname));
+            }
+            fn_outputs.push(quote!(Option<#typ>));
+            output_vnames.push(format_ident!("r{}", i));
+            output_vectors.push(format_ident!("v{}", i));
+            output_types.push(mut_ident);
+        }
+
+        if !self.signature.outputs.is_empty() && !self.signature.has_entity() {
+            system_data.push(quote!(specs::Entities<'a>));
+            let vname = format_ident!("entity");
+            let jname = format_ident!("j{}", vname);
+            foreach_names.push(vname);
+            input_names.push(quote!(#jname));
+            join_names.push(quote!(&#jname));
+        }
+
         let dynamic_init = if self.dynamic {
             system_data.push(quote!(specs::Read<'a, ecs_engine::DynamicManager>));
             state_names.push(format_ident!("lib"));
-            states.push(parse_quote!(ecs_engine::DynamicSystem<fn(#(#inputs,)*)>));
+            states.push(
+                parse_quote!(ecs_engine::DynamicSystem<fn(#(#fn_inputs,)*) ->(#(#fn_outputs),*)>),
+            );
             input_names.push(quote!(dm));
             quote!(self.lib.init(#lib_name.into(), #func_name.into(), dm);)
         } else {
@@ -435,7 +502,7 @@ impl Config {
 
         let system_setup = quote! {
             #[derive(Default)]
-            struct #system_name {
+            pub struct #system_name {
                 #(#state_names:#states,)*
             }
 
@@ -464,9 +531,18 @@ impl Config {
 
                     fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
                         if let Some(symbol) = self.lib.get_symbol(&dm) {
+                            #(let mut #output_vectors = Vec::new();)*
                             for (#(#foreach_names,)*) in (#(#join_names,)*).join() {
-                                (*symbol)(#(#func_names,)*);
+                                let (#(#output_vnames),*) = (*symbol)(#(#func_names,)*);
+                                #(if let Some(#output_vnames) = #output_vnames{
+                                    #output_vectors.push((entity, #output_vnames));
+                                })*
                             }
+                            #(
+                                for (entity, #output_vnames) in #output_vectors {
+                                    #output_snames.insert(entity, #output_types::new(#output_vnames));
+                                }
+                            )*
                         } else {
                             log::error!("symbol not found for system {}", #func_name);
                         }
@@ -501,30 +577,37 @@ enum Parameter {
 
 struct Sig {
     ident: Ident,
-    generics: Generics,
     parameters: Vec<Parameter>,
     state_args: Vec<Type>,
     resource_args: Vec<Type>,
     component_args: Vec<Type>,
     input: Option<Type>,
     return_type: ReturnType,
+    outputs: Vec<Type>,
+    output_names: Vec<Ident>,
 }
 
 impl Sig {
+    fn has_entity(&self) -> bool {
+        self.parameters.iter().any(|param| match param {
+            Parameter::Entity(_) => true,
+            _ => false,
+        })
+    }
+
     fn parse(item: &mut Signature) -> Result<Self, Error> {
         let mut parameters = Vec::new();
         let mut resource_args = Vec::new();
         let mut state_args = Vec::new();
         let mut component_args = Vec::new();
         let mut input = None;
+        let mut index = 0usize;
         for param in &mut item.inputs {
+            index += 1;
             match param {
                 syn::FnArg::Receiver(_) => return Err(Error::SelfNotAllowed),
                 syn::FnArg::Typed(arg) => {
-                    let name = match arg.pat.as_ref() {
-                        Pat::Ident(ident) => ident.ident.clone(),
-                        _ => return Err(Error::InvalidIdentifierForArgument(arg.span())),
-                    };
+                    let name = format_ident!("i{}", index);
                     match arg.ty.as_ref() {
                         Type::Reference(ty) => {
                             let mutable = ty.mutability.is_some();
@@ -558,6 +641,7 @@ impl Sig {
                                         if mutable {
                                             return Err(Error::EntityCantBeMutable(arg.span()));
                                         }
+                                        let name = format_ident!("entity");
                                         parameters.push(Parameter::Entity(name));
                                     } else {
                                         parameters.push(Parameter::Component(
@@ -576,16 +660,78 @@ impl Sig {
             }
         }
 
+        let mut outputs = Vec::new();
+        match &item.output {
+            ReturnType::Default => {}
+            ReturnType::Type(_, ty) => match ty.as_ref() {
+                Type::Path(path) => {
+                    if !is_type(ty, &["Option"]) {
+                        return Err(Error::InvalidReturnType(item.output.span()));
+                    }
+                    let typ = get_option_inner_type(path)?;
+                    outputs.push(typ);
+                }
+                Type::Tuple(tuple) => {
+                    for (i, elem) in tuple.elems.iter().enumerate() {
+                        if !is_type(elem, &["Option"]) {
+                            return Err(Error::InvalidReturnType(item.output.span()));
+                        }
+                        match elem {
+                            Type::Path(path) => {
+                                let typ = get_option_inner_type(path)?;
+                                outputs.push(typ);
+                            }
+                            _ => return Err(Error::InvalidReturnType(elem.span())),
+                        }
+                    }
+                }
+                _ => return Err(Error::InvalidReturnType(item.output.span())),
+            },
+        }
+
         Ok(Self {
             ident: item.ident.clone(),
-            generics: item.generics.clone(),
             parameters,
             resource_args,
             state_args,
             component_args,
             input,
             return_type: item.output.clone(),
+            outputs,
+            output_names: Vec::default(),
         })
+    }
+
+    fn generate_output_names(&mut self) {
+        let mut index = 0usize;
+        for typ in &self.outputs {
+            index += 1;
+            if let Some(name) = self.get_input_component_name(typ) {
+                self.output_names.push(name);
+            } else {
+                self.output_names.push(format_ident!("o{}", index));
+            }
+        }
+    }
+
+    fn get_input_component_name(&self, typ: &Type) -> Option<Ident> {
+        self.parameters
+            .iter()
+            .find(|param| match param {
+                Parameter::Component(ident, index, _) => {
+                    let ty = &self.component_args[*index];
+                    if ty == typ {
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            })
+            .map(|param| match param {
+                Parameter::Component(ident, _, _) => ident.clone(),
+                _ => unreachable!(),
+            })
     }
 
     fn find_remove_arg_attr(attributes: &mut Vec<Attribute>) -> Result<Option<ArgAttr>, Error> {
@@ -620,6 +766,26 @@ impl Sig {
             }
         }
         Ok(attr)
+    }
+
+    fn is_return_type(&self, typ: &Type) -> bool {
+        self.outputs.iter().any(|ty| typ == ty)
+    }
+}
+
+fn get_option_inner_type(path: &TypePath) -> Result<Type, Error> {
+    let segment = &path.path.segments[0];
+    match &segment.arguments {
+        PathArguments::AngleBracketed(bracketed) => {
+            let arg = bracketed.args.iter().next().unwrap();
+            match arg {
+                GenericArgument::Type(ty) => Ok(ty.clone()),
+                _ => Err(Error::InvalidReturnType(path.span())),
+            }
+        }
+        _ => {
+            return Err(Error::InvalidReturnType(path.span()));
+        }
     }
 }
 

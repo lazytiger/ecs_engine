@@ -9,7 +9,8 @@ fn user_derive(
     bag: &mut BagInfo,
     #[state] other: &mut usize,
     #[resource] re: &mut String,
-) {
+) -> Option<UserInfo> {
+    None
 }
 
 #[system]
