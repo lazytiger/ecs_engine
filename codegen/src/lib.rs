@@ -38,6 +38,14 @@ fn component_exists(name: &String) -> bool {
 
 #[derive(thiserror::Error, Debug)]
 enum Error {
+    #[error("duplicate output type found")]
+    DuplicateOutputType,
+    #[error("duplicate component type found")]
+    DuplicateComponentType,
+    #[error("duplicate resource type found")]
+    DuplicateResourceType,
+    #[error("duplicate state type found")]
+    DuplicateStateType,
     #[error("system types must be one of `single`, `double` or `multiple`")]
     UnexpectedSystemType(Span),
     #[error("duplicate system name")]
@@ -203,6 +211,22 @@ fn component_type_to_string(ty: &Type) -> Result<String, Error> {
     }
 }
 
+fn contains_duplicate(data: &Vec<Type>) -> bool {
+    if data.len() < 2 {
+        false
+    } else {
+        for i in 0..data.len() {
+            let t1 = &data[i];
+            for j in (i + 1)..data.len() {
+                if t1 == &data[j] {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
 impl Config {
     fn parse(attr: SystemAttr, item: &mut ItemFn) -> Result<Self, Error> {
         let mut to_remove = Vec::new();
@@ -302,6 +326,19 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), Error> {
+        if contains_duplicate(&self.signature.outputs) {
+            return Err(Error::DuplicateOutputType);
+        }
+        if contains_duplicate(&self.signature.component_args) {
+            return Err(Error::DuplicateComponentType);
+        }
+        if contains_duplicate(&self.signature.resource_args) {
+            return Err(Error::DuplicateResourceType);
+        }
+        if contains_duplicate(&self.signature.state_args) {
+            return Err(Error::DuplicateStateType);
+        }
+
         Ok(())
     }
 
@@ -540,7 +577,9 @@ impl Config {
                             }
                             #(
                                 for (entity, #output_vnames) in #output_vectors {
-                                    #output_snames.insert(entity, #output_types::new(#output_vnames));
+                                    if let Err(err) = #output_snames.insert(entity, #output_types::new(#output_vnames)) {
+                                        log::error!("insert component failed {}", err);
+                                    }
                                 }
                             )*
                         } else {
