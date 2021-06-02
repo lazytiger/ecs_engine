@@ -5,6 +5,7 @@ use convert_case::{Case, Casing};
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
+use syn::spanned::Spanned;
 use syn::{parse_macro_input, Attribute, Generics, Pat, Signature, Visibility};
 use syn::{FnArg, ItemFn, Lit, LitStr, Meta, NestedMeta, Type};
 
@@ -51,8 +52,6 @@ enum Error {
     DuplicateDynamicFunctionName,
     #[error("static and dynamic can not appear in both time")]
     StaticConflictsDynamic,
-    #[error("no path allowed in dynamic")]
-    UnexpectedPathInDynamic,
     #[error("method not found for system, use function instead")]
     SelfNotAllowed,
     #[error("system function parameters must be component references, state references or resource references")]
@@ -62,7 +61,15 @@ enum Error {
     )]
     ConflictParameterAttribute,
     #[error("component type should not use full path name")]
-    InvalidComponentType,
+    InvalidComponentType(Span),
+    #[error("only identifier allowed for function argument name")]
+    InvalidIdentifierForArgument(Span),
+    #[error("only one input allowed in system")]
+    MultipleInputFound,
+    #[error("#[dynamic(\"lib\", \"func\")] is not allowed, use #[dynamic(lib = \"lib\", func = \"func\")] instead")]
+    LiteralFoundInDynamicAttribute,
+    #[error("invalid literal as identifier")]
+    InvalidLiteralFoundForName(Span),
 }
 
 impl Error {
@@ -126,7 +133,9 @@ impl SystemAttr {
                         system_type,
                     } = match item {
                         syn::NestedMeta::Meta(meta) => Self::parse_meta(&meta)?,
-                        syn::NestedMeta::Lit(_) => panic!("unexpected literal"),
+                        syn::NestedMeta::Lit(_) => {
+                            return Err(Error::LiteralFoundInDynamicAttribute)
+                        }
                     };
                     if let Some(system_name) = system_name {
                         if n.replace(system_name).is_some() {
@@ -160,25 +169,25 @@ struct Config {
     signature: Sig,
 }
 
-fn lit_to_ident(lit: &Lit) -> Ident {
+fn lit_to_ident(lit: &Lit) -> Result<Ident, Error> {
     let (name, span) = match lit {
         Lit::Str(name) => (name.value(), name.span()),
         Lit::Char(name) => (name.value().to_string(), name.span()),
-        _ => panic!("invalid system name"),
+        _ => return Err(Error::InvalidLiteralFoundForName(lit.span())),
     };
-    Ident::new(&name, span)
+    Ok(Ident::new(&name, span))
 }
 
 fn component_type_to_string(ty: &Type) -> Result<String, Error> {
     match ty {
         Type::Path(path) => {
             if path.path.segments.len() > 1 || path.qself.is_some() {
-                Err(Error::InvalidComponentType)
+                Err(Error::InvalidComponentType(ty.span()))
             } else {
                 Ok(path.path.segments[0].ident.to_string())
             }
         }
-        _ => panic!("not supported type"),
+        _ => Err(Error::InvalidComponentType(Span::call_site())),
     }
 }
 
@@ -286,7 +295,7 @@ impl Config {
         self.validate()?;
 
         let system_name = if let Some(system_name) = &self.attr.system_name {
-            lit_to_ident(system_name)
+            lit_to_ident(system_name)?
         } else {
             format_ident!(
                 "{}System",
@@ -321,7 +330,7 @@ impl Config {
         let mut states = Vec::new();
         for param in &self.signature.parameters {
             match param {
-                Parameter::Component(index, mutable) => {
+                Parameter::Component(name, index, mutable) => {
                     let ty = self.signature.component_args[*index].clone();
                     let name = component_type_to_string(&ty)?;
                     components.push(format_ident!("{}Mut", name));
@@ -332,8 +341,8 @@ impl Config {
                         new_components.push(format_ident!("{}", name));
                     }
                 }
-                Parameter::State(index, mutable) => {
-                    let (name, ty) = self.signature.state_args[*index].clone();
+                Parameter::State(name, index, mutable) => {
+                    let ty = self.signature.state_args[*index].clone();
                     state_names.push(name);
                     states.push(ty);
                 }
@@ -393,17 +402,17 @@ enum ArgAttr {
 }
 
 enum Parameter {
-    Component(usize, bool),
-    Resource(usize, bool),
-    State(usize, bool),
-    Input,
+    Component(Ident, usize, bool),
+    Resource(Ident, usize, bool),
+    State(Ident, usize, bool),
+    Input(Ident),
 }
 
 struct Sig {
     ident: Ident,
     generics: Generics,
     parameters: Vec<Parameter>,
-    state_args: Vec<(Ident, Type)>,
+    state_args: Vec<Type>,
     resource_args: Vec<Type>,
     component_args: Vec<Type>,
     input: Option<Type>,
@@ -419,39 +428,52 @@ impl Sig {
         for param in &mut item.inputs {
             match param {
                 syn::FnArg::Receiver(_) => return Err(Error::SelfNotAllowed),
-                syn::FnArg::Typed(arg) => match arg.ty.as_ref() {
-                    Type::Reference(ty) => {
-                        let mutable = ty.mutability.is_some();
-                        let elem = ty.elem.as_ref().clone();
-                        let attribute = Self::find_remove_arg_attr(&mut arg.attrs)?;
-                        match attribute {
-                            Some(ArgAttr::Resource) => {
-                                parameters.push(Parameter::Resource(resource_args.len(), mutable));
-                                resource_args.push(elem);
-                            }
-                            Some(ArgAttr::State) => {
-                                parameters.push(Parameter::State(state_args.len(), mutable));
-                                match arg.pat.as_ref() {
-                                    Pat::Ident(ident) => {
-                                        eprintln!("{}", ident.ident);
-                                        state_args.push((ident.ident.clone(), elem))
+                syn::FnArg::Typed(arg) => {
+                    let name = match arg.pat.as_ref() {
+                        Pat::Ident(ident) => ident.ident.clone(),
+                        _ => return Err(Error::InvalidIdentifierForArgument(arg.span())),
+                    };
+                    match arg.ty.as_ref() {
+                        Type::Reference(ty) => {
+                            let mutable = ty.mutability.is_some();
+                            let elem = ty.elem.as_ref().clone();
+                            let attribute = Self::find_remove_arg_attr(&mut arg.attrs)?;
+                            match attribute {
+                                Some(ArgAttr::Resource) => {
+                                    parameters.push(Parameter::Resource(
+                                        name,
+                                        resource_args.len(),
+                                        mutable,
+                                    ));
+                                    resource_args.push(elem);
+                                }
+                                Some(ArgAttr::State) => {
+                                    parameters.push(Parameter::State(
+                                        name,
+                                        state_args.len(),
+                                        mutable,
+                                    ));
+                                    state_args.push(elem)
+                                }
+                                Some(ArgAttr::Input) => {
+                                    parameters.push(Parameter::Input(name));
+                                    if input.replace(elem).is_some() {
+                                        return Err(Error::MultipleInputFound);
                                     }
-                                    _ => panic!("not supported pat"),
+                                }
+                                _ => {
+                                    parameters.push(Parameter::Component(
+                                        name,
+                                        component_args.len(),
+                                        mutable,
+                                    ));
+                                    component_args.push(elem);
                                 }
                             }
-                            Some(ArgAttr::Input) => {
-                                parameters.push(Parameter::Input);
-                                input.replace(elem);
-                            }
-                            _ => {
-                                parameters
-                                    .push(Parameter::Component(component_args.len(), mutable));
-                                component_args.push(elem);
-                            }
                         }
+                        _ => return Err(Error::InvalidArgument(Span::call_site())),
                     }
-                    _ => return Err(Error::InvalidArgument(Span::call_site())),
-                },
+                }
             }
         }
 
