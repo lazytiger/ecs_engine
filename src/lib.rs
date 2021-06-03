@@ -278,3 +278,13 @@ pub trait SerDe {
     fn ser<W: Write>(&self, w: &mut Write);
     fn de<R: Read>(&mut self, r: &R);
 }
+
+impl SerDe for &u8 {
+    fn ser<W: Write>(&self, w: &mut dyn Write) {
+        todo!()
+    }
+
+    fn de<R: Read>(&mut self, r: &R) {
+        todo!()
+    }
+}

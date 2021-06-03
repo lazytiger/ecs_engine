@@ -6,8 +6,8 @@ use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
 
 use syn::{
-    parse_macro_input, parse_quote, spanned::Spanned, Attribute, GenericArgument, ItemFn, Lit,
-    LitStr, Meta, PathArguments, ReturnType, Signature, Type, TypePath,
+    parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, GenericArgument, ItemFn,
+    Lit, LitStr, Meta, Pat, PathArguments, ReturnType, Signature, Type, TypePath, Visibility,
 };
 
 lazy_static::lazy_static! {
@@ -894,11 +894,56 @@ pub fn system(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(err) => err.emit(),
     };
 
-    TokenStream::from(code)
+    code.into()
 }
 
 #[proc_macro_derive(ChangeSet)]
 pub fn derive_changeset(item: TokenStream) -> TokenStream {
     let code = quote!();
     TokenStream::from(code)
+}
+
+#[proc_macro_attribute]
+pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut input = parse_macro_input!(item as ItemFn);
+    input.vis = Visibility::Inherited;
+    let name = input.sig.ident.clone();
+    let pname = format_ident!("__private_{}", name);
+
+    let mut pinput = input.clone();
+    let mut inputs = Vec::new();
+    for param in &mut pinput.sig.inputs {
+        match param {
+            FnArg::Typed(pt) => {
+                let name = match pt.pat.as_ref() {
+                    Pat::Ident(ident) => ident.ident.clone(),
+                    _ => unreachable!(),
+                };
+                match pt.ty.as_mut() {
+                    Type::Reference(r) => {
+                        if r.mutability.is_some() {
+                            inputs.push(quote!(unsafe {::std::mem::transmute(#name)}));
+                        } else {
+                            inputs.push(quote!(#name));
+                        }
+                        r.mutability = None;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    pinput.block = parse_quote!({
+        ::std::panic::catch_unwind(|| #pname(#(#inputs,)*));
+    });
+
+    input.sig.ident = pname;
+
+    let code = quote! {
+        #[no_mangle]
+        extern "C" #pinput
+        #input
+    };
+    code.into()
 }

@@ -3,7 +3,7 @@ use specs::{
     WriteStorage,
 };
 
-use ecs_engine::{ChangeSet, DynamicManager, DynamicSystem, Mutable};
+use ecs_engine::{ChangeSet, DynamicManager, DynamicSystem, Mutable, SerDe};
 use specs::world::Index;
 
 #[derive(Clone, Default)]
@@ -202,7 +202,10 @@ impl MyTest {
 }
 
 impl MyTest {
-    pub fn encode<W: std::io::Write>(&self, w: &mut W) {
+    pub fn foreach_change<T, S>(&self, callback: T)
+    where
+        T: Fn(u128, &dyn SerDe),
+    {
         let mut mask = self._mask;
         for i in 0..10 {
             if mask & 0x1 == 0 {
@@ -210,8 +213,8 @@ impl MyTest {
             }
             mask >>= 1;
             match i {
-                0 => self.age.encode(w),
-                1 => self.sex.encode(w),
+                0 => callback(i, &self.age),
+                1 => callback(i, &self.gender),
                 _ => unreachable!(),
             }
         }

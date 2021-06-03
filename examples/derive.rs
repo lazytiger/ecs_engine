@@ -1,4 +1,4 @@
-use codegen::{system, ChangeSet};
+use codegen::{export, system, ChangeSet};
 use ecs_engine::DynamicManager;
 use specs::{world::Index, BitSet, DispatcherBuilder, Join, LazyUpdate, World, WorldExt};
 
@@ -89,3 +89,6 @@ struct MyTest {
     age: u8,
     sex: u8,
 }
+
+#[export]
+pub fn mytest(user: &UserInfo, bag: &mut BagInfo) {}
