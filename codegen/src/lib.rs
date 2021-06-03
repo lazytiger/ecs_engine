@@ -430,11 +430,11 @@ impl Config {
                         fn_inputs.push(quote!(&#ty));
                     }
                     if *mutable || self.signature.is_return_type(&ty) {
-                        let data = quote!(specs::WriteStorage<'a, #mut_ident>);
+                        let data = quote!(::specs::WriteStorage<'a, #mut_ident>);
                         system_data.push(data);
                         input_names.push(quote!(mut #jname));
                     } else {
-                        let data = quote!(specs::ReadStorage<'a, #mut_ident>);
+                        let data = quote!(::specs::ReadStorage<'a, #mut_ident>);
                         system_data.push(data);
                         input_names.push(quote!(#jname));
                     };
@@ -454,9 +454,9 @@ impl Config {
                 Parameter::Resource(vname, index, mutable) => {
                     let ty = self.signature.resource_args[*index].clone();
                     let data = if *mutable {
-                        quote!(specs::Write<'a, #ty>)
+                        quote!(::specs::Write<'a, #ty>)
                     } else {
-                        quote!(specs::Read<'a, #ty>)
+                        quote!(::specs::Read<'a, #ty>)
                     };
                     system_data.push(data);
                     if *mutable {
@@ -482,8 +482,8 @@ impl Config {
                     let jname = format_ident!("j{}", vname);
                     join_names.push(quote!(&#jname));
                     input_names.push(quote!(#jname));
-                    fn_inputs.push(quote!(&specs::Entity));
-                    system_data.push(quote!(specs::Entities<'a>));
+                    fn_inputs.push(quote!(&::specs::Entity));
+                    system_data.push(quote!(::specs::Entities<'a>));
                     foreach_names.push(vname.clone());
                     func_names.push(quote!(&#vname));
                 }
@@ -501,7 +501,7 @@ impl Config {
                     new_mutable_names.push(mut_ident.clone());
                     new_components.push(format_ident!("{}", tname));
                 }
-                system_data.push(quote!(WriteStorage<'a, #typ>));
+                system_data.push(quote!(::specs::WriteStorage<'a, #typ>));
                 input_names.push(quote!(mut vname));
                 output_snames.push(vname.clone());
             } else {
@@ -514,7 +514,7 @@ impl Config {
         }
 
         if !self.signature.outputs.is_empty() && !self.signature.has_entity() {
-            system_data.push(quote!(specs::Entities<'a>));
+            system_data.push(quote!(::specs::Entities<'a>));
             let vname = format_ident!("entity");
             let jname = format_ident!("j{}", vname);
             foreach_names.push(vname);
@@ -523,9 +523,9 @@ impl Config {
         }
 
         let (dynamic_init, dynamic_fn) = if self.dynamic {
-            system_data.push(quote!(specs::Read<'a, ecs_engine::DynamicManager>));
+            system_data.push(quote!(::specs::Read<'a, ::ecs_engine::DynamicManager>));
             state_names.push(format_ident!("lib"));
-            states.push(parse_quote!(ecs_engine::DynamicSystem<#system_fn>));
+            states.push(parse_quote!(::ecs_engine::DynamicSystem<#system_fn>));
             input_names.push(quote!(dm));
             let dynamic_init = quote!(self.lib.init(#lib_name.into(), #func_name.into(), dm););
             let dynamic_fn =
@@ -544,9 +544,9 @@ impl Config {
             }
 
             #(pub const #new_index_names :usize = #new_indexes;)*
-            #(pub type #new_mutable_names = ecs_engine::Mutable<#new_components, #new_indexes>;)*
+            #(pub type #new_mutable_names = ::ecs_engine::Mutable<#new_components, #new_indexes>;)*
             impl #system_name {
-                    pub fn setup(mut self, world: &mut specs::World, builder: &mut specs::DispatcherBuilder, dm: &ecs_engine::DynamicManager) {
+                    pub fn setup(mut self, world: &mut ::specs::World, builder: &mut ::specs::DispatcherBuilder, dm: &::ecs_engine::DynamicManager) {
                         #(world.register::<#components>();)*
                         #dynamic_init
                         builder.add(self, #func_name, &[]);
@@ -598,7 +598,7 @@ impl Config {
                     }
                 };
                 quote! {
-                    impl<'a> specs::System<'a> for #system_name {
+                    impl<'a> ::specs::System<'a> for #system_name {
                         type SystemData = (
                             #(#system_data,)*
                         );
@@ -894,5 +894,11 @@ pub fn system(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(err) => err.emit(),
     };
 
+    TokenStream::from(code)
+}
+
+#[proc_macro_derive(ChangeSet)]
+pub fn derive_changeset(item: TokenStream) -> TokenStream {
+    let code = quote!();
     TokenStream::from(code)
 }

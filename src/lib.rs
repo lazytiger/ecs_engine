@@ -12,31 +12,12 @@ pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
 use specs::{world::Index, BitSet, Component, Join, System, VecStorage, WriteStorage};
-use std::marker::PhantomData;
+use std::{
+    io::{Read, Write},
+    marker::PhantomData,
+};
 
 pub mod network;
-
-#[derive(Clone, Default)]
-pub struct UserInfo {
-    pub name: String,
-    pub guild_id: Index,
-}
-
-#[derive(Clone, Default)]
-pub struct GuildInfo {
-    users: BitSet,
-    pub name: String,
-}
-
-#[derive(Clone, Default)]
-pub struct BagInfo {
-    pub items: Vec<String>,
-}
-
-#[derive(Clone, Default)]
-pub struct GuildMember {
-    pub role: u8,
-}
 
 pub struct Library {
     name: String,
@@ -285,4 +266,15 @@ where
         }
         Mutable::<T, N>::reset();
     }
+}
+
+pub trait ChangeSet {
+    fn index() -> usize;
+    fn mask(&self) -> u128;
+    fn reset(&mut self);
+}
+
+pub trait SerDe {
+    fn ser<W: Write>(&self, w: &mut Write);
+    fn de<R: Read>(&mut self, r: &R);
 }

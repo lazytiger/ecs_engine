@@ -1,17 +1,38 @@
 use specs::{
-    DispatcherBuilder, Entities, Join, Read, ReadStorage, System, World,
-    WorldExt, Write, WriteStorage,
+    BitSet, DispatcherBuilder, Entities, Join, Read, ReadStorage, System, World, WorldExt, Write,
+    WriteStorage,
 };
 
-use ecs_engine::{
-    BagInfo, DynamicManager, DynamicSystem, GuildInfo, GuildMember, Mutable, UserInfo,
-};
+use ecs_engine::{ChangeSet, DynamicManager, DynamicSystem, Mutable};
+use specs::world::Index;
+
+#[derive(Clone, Default)]
+pub struct UserInfo {
+    pub name: String,
+    pub guild_id: Index,
+}
+
+#[derive(Clone, Default)]
+pub struct GuildInfo {
+    users: BitSet,
+    pub name: String,
+}
+
+#[derive(Clone, Default)]
+pub struct BagInfo {
+    pub items: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+pub struct GuildMember {
+    pub role: u8,
+}
 
 pub type UserTestFn = fn(&UserInfo, &BagInfo, &usize);
 
 fn test(_a: &UserInfo, _b: &BagInfo, _c: &usize) {}
 
-static _: UserTestFn = test;
+static _T: UserTestFn = test;
 
 #[derive(Default)]
 struct UserTestSystem {
@@ -135,4 +156,64 @@ fn main() {
     dispatcher.setup(&mut world);
     dispatcher.dispatch(&world);
     world.maintain();
+}
+
+struct MyTest {
+    name: String,
+    gender: u8,
+    age: u8,
+    profession: u8,
+    _mask: u128,
+}
+
+impl ChangeSet for MyTest {
+    fn index() -> usize {
+        0
+    }
+
+    fn mask(&self) -> u128 {
+        self._mask
+    }
+
+    fn reset(&mut self) {
+        self._mask = 0;
+    }
+}
+
+impl MyTest {
+    #[inline]
+    pub fn name(&self) -> &String {
+        &self.name
+    }
+
+    #[inline]
+    pub fn name_mut(&mut self) -> &mut String {
+        self._mask |= 1 << 0;
+        &mut self.name
+    }
+
+    pub fn gender(&self) -> u8 {
+        self.gender
+    }
+
+    pub fn age(&self) -> u8 {
+        self.age
+    }
+}
+
+impl MyTest {
+    pub fn encode<W: std::io::Write>(&self, w: &mut W) {
+        let mut mask = self._mask;
+        for i in 0..10 {
+            if mask & 0x1 == 0 {
+                continue;
+            }
+            mask >>= 1;
+            match i {
+                0 => self.age.encode(w),
+                1 => self.sex.encode(w),
+                _ => unreachable!(),
+            }
+        }
+    }
 }

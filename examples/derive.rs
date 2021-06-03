@@ -1,6 +1,28 @@
-use codegen::system;
-use ecs_engine::{BagInfo, DynamicManager, UserInfo};
-use specs::{DispatcherBuilder, Join, LazyUpdate, World, WorldExt};
+use codegen::{system, ChangeSet};
+use ecs_engine::DynamicManager;
+use specs::{world::Index, BitSet, DispatcherBuilder, Join, LazyUpdate, World, WorldExt};
+
+#[derive(Clone, Default)]
+pub struct UserInfo {
+    pub name: String,
+    pub guild_id: Index,
+}
+
+#[derive(Clone, Default)]
+pub struct GuildInfo {
+    users: BitSet,
+    pub name: String,
+}
+
+#[derive(Clone, Default)]
+pub struct BagInfo {
+    pub items: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+pub struct GuildMember {
+    pub role: u8,
+}
 
 #[system]
 #[dynamic(user)]
@@ -59,4 +81,11 @@ fn main() {
     dispatcher.setup(&mut world);
     dispatcher.dispatch(&world);
     world.maintain();
+}
+
+#[derive(ChangeSet)]
+struct MyTest {
+    name: String,
+    age: u8,
+    sex: u8,
 }
