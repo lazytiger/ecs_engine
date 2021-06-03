@@ -11,11 +11,8 @@ use std::{
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
-use specs::{
-    shred::DynamicSystemData, storage::UnprotectedStorage, world::Index, BitSet, Component, Join,
-    System, VecStorage, WriteStorage,
-};
-use std::{any::Any, marker::PhantomData};
+use specs::{world::Index, BitSet, Component, Join, System, VecStorage, WriteStorage};
+use std::marker::PhantomData;
 
 pub mod network;
 
@@ -255,7 +252,7 @@ pub const MAX_COMPONENTS: usize = 1024;
 lazy_static::lazy_static! {
     pub static ref MODS:Vec<AtomicBool> = {
         let mut mods = Vec::with_capacity(MAX_COMPONENTS);
-        for i in 0..MAX_COMPONENTS {
+        for _i in 0..MAX_COMPONENTS {
            mods.push(AtomicBool::new(false));
         }
         mods
@@ -283,7 +280,7 @@ where
         if !Mutable::<T, N>::modified() {
             return;
         }
-        for (data,) in (&data,).join() {
+        for (_data,) in (&data,).join() {
             todo!()
         }
         Mutable::<T, N>::reset();

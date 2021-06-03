@@ -6,9 +6,8 @@ use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
 
 use syn::{
-    parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, GenericArgument, Generics,
-    ItemFn, Lit, LitStr, Meta, NestedMeta, Pat, PathArguments, ReturnType, Signature, Type,
-    TypePath, Visibility,
+    parse_macro_input, parse_quote, spanned::Spanned, Attribute, GenericArgument, ItemFn, Lit,
+    LitStr, Meta, PathArguments, ReturnType, Signature, Type, TypePath,
 };
 
 lazy_static::lazy_static! {
@@ -72,8 +71,6 @@ enum Error {
     ConflictParameterAttribute,
     #[error("component type should not use full path name")]
     InvalidComponentType(Span),
-    #[error("only identifier allowed for function argument name")]
-    InvalidIdentifierForArgument(Span),
     #[error("only one input allowed in system")]
     MultipleInputFound,
     #[error("#[dynamic(\"lib\", \"func\")] is not allowed, use #[dynamic(lib = \"lib\", func = \"func\")] instead")]
@@ -96,7 +93,6 @@ impl Error {
             Error::InvalidArgument(span) => *span,
             Error::InvalidMetaForDynamic(span) => *span,
             Error::InvalidComponentType(span) => *span,
-            Error::InvalidIdentifierForArgument(span) => *span,
             Error::InvalidLiteralFoundForName(span) => *span,
             Error::EntityCantBeMutable(span) => *span,
             Error::InvalidReturnType(span) => *span,
@@ -653,7 +649,6 @@ struct Sig {
     resource_args: Vec<Type>,
     component_args: Vec<Type>,
     input: Option<Type>,
-    return_type: ReturnType,
     outputs: Vec<Type>,
     output_names: Vec<Ident>,
 }
@@ -743,7 +738,7 @@ impl Sig {
                     outputs.push(typ);
                 }
                 Type::Tuple(tuple) => {
-                    for (i, elem) in tuple.elems.iter().enumerate() {
+                    for elem in &tuple.elems {
                         if !is_type(elem, &["Option"]) {
                             return Err(Error::InvalidReturnType(item.output.span()));
                         }
@@ -767,7 +762,6 @@ impl Sig {
             state_args,
             component_args,
             input,
-            return_type: item.output.clone(),
             outputs,
             output_names: Vec::default(),
         })
@@ -789,7 +783,7 @@ impl Sig {
         self.parameters
             .iter()
             .find(|param| match param {
-                Parameter::Component(ident, index, _) => {
+                Parameter::Component(_, index, _) => {
                     let ty = &self.component_args[*index];
                     if ty == typ {
                         true

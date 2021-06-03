@@ -1,6 +1,6 @@
 use codegen::system;
 use ecs_engine::{BagInfo, DynamicManager, UserInfo};
-use specs::{DispatcherBuilder, Entity, Join, LazyUpdate, World, WorldExt};
+use specs::{DispatcherBuilder, Join, LazyUpdate, World, WorldExt};
 
 #[system]
 #[dynamic(user)]
@@ -25,7 +25,7 @@ fn guild_derive(
 
 #[system]
 #[statics]
-fn static_test(user: &UserInfo, #[resource] index: &mut usize) {
+fn static_test(_user: &UserInfo, #[resource] index: &mut usize) {
     *index += 1;
 }
 

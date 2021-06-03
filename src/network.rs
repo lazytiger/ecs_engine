@@ -1,6 +1,6 @@
 use mio::{
     event::Event,
-    net::{TcpListener, TcpSocket, TcpStream},
+    net::{TcpListener, TcpStream},
     Events, Interest, Poll, Registry, Token,
 };
 use slab::Slab;
@@ -37,9 +37,9 @@ impl Connection {
         }
     }
 
-    fn send(&mut self, data: Vec<u8>) {}
+    fn send(&mut self, _data: Vec<u8>) {}
 
-    fn do_event(&mut self, event: &Event, registry: &Registry) {}
+    fn do_event(&mut self, _event: &Event, _registry: &Registry) {}
 }
 
 pub type NetworkData = (usize, Vec<u8>);

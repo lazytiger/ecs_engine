@@ -1,21 +1,17 @@
 use specs::{
-    shred::DynamicSystemData, DispatcherBuilder, Entities, Join, Read, ReadStorage, System, World,
+    DispatcherBuilder, Entities, Join, Read, ReadStorage, System, World,
     WorldExt, Write, WriteStorage,
 };
 
 use ecs_engine::{
     BagInfo, DynamicManager, DynamicSystem, GuildInfo, GuildMember, Mutable, UserInfo,
 };
-use std::{
-    panic::catch_unwind,
-    sync::{Arc, Mutex},
-};
 
 pub type UserTestFn = fn(&UserInfo, &BagInfo, &usize);
 
-fn test(a: &UserInfo, b: &BagInfo, c: &usize) {}
+fn test(_a: &UserInfo, _b: &BagInfo, _c: &usize) {}
 
-static _test: UserTestFn = test;
+static _: UserTestFn = test;
 
 #[derive(Default)]
 struct UserTestSystem {
@@ -95,7 +91,9 @@ impl<'a> System<'a> for GuildTestSystem {
             for (entity, user) in (&entities, &user).join() {
                 if let Some(guild) = guild.get(entity) {
                     if let Some(member) = (*symbol)(user, guild) {
-                        member_storage.insert(entity, Mutable::new(member));
+                        if let Err(err) = member_storage.insert(entity, Mutable::new(member)) {
+                            log::error!("insert component failed:{}", err);
+                        }
                     }
                 } else {
                     log::error!("guild:{:?} not found", entity);
