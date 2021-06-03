@@ -526,20 +526,17 @@ impl Config {
             join_names.push(quote!(&#jname));
         }
 
-        let dynamic_init = if self.dynamic {
+        let (dynamic_init, dynamic_fn) = if self.dynamic {
             system_data.push(quote!(specs::Read<'a, ecs_engine::DynamicManager>));
             state_names.push(format_ident!("lib"));
             states.push(parse_quote!(ecs_engine::DynamicSystem<#system_fn>));
             input_names.push(quote!(dm));
-            quote!(self.lib.init(#lib_name.into(), #func_name.into(), dm);)
+            let dynamic_init = quote!(self.lib.init(#lib_name.into(), #func_name.into(), dm););
+            let dynamic_fn =
+                quote!(pub type #system_fn = fn(#(#fn_inputs,)*) ->(#(#fn_outputs),*););
+            (dynamic_init, dynamic_fn)
         } else {
-            quote!()
-        };
-
-        let dynamic_fn = if self.dynamic {
-            quote!(pub type #system_fn = fn(#(#fn_inputs,)*) ->(#(#fn_outputs),*);)
-        } else {
-            quote!()
+            (quote!(), quote!())
         };
 
         let system_setup = quote! {
