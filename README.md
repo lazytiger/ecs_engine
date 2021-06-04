@@ -532,4 +532,5 @@ TBD
 ## 大世界移动
 
 TBD
-同一个component不能同时出现在input和output里，加上这个检查
+* ~~同一个component不能同时出现在input和output里，加上这个检查~~
+* 有可能input有没匹配上的，需要加日志

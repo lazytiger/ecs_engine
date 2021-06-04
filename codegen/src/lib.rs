@@ -566,17 +566,17 @@ impl Config {
             (quote!(), quote!(), static_call)
         };
 
-        let (purge_init, purge_push, purge_done) = if self.signature.input.is_some() {
-            let init = quote!(let mut ev = Vec::new(););
-            let push = quote!(ev.push(entity););
-            let purge = quote! {
-                for e in ev {
-                    #input_storage.remove(e);
-                }
-            };
-            (init, push, purge)
+        let purge_code = if self.signature.input.is_some() {
+            quote! {
+                let es: Vec<_> = (&jentity, &#input_storage).join().map(|(e, _)|e).collect();
+                es.iter().for_each(|e|{
+                    if let Err(err) = #input_storage.remove(*e) {
+                        log::error!("remove input component failed:{}", err);
+                    }
+                });
+            }
         } else {
-            (quote!(), quote!(), quote!())
+            quote!()
         };
 
         let system_setup = quote! {
@@ -607,12 +607,10 @@ impl Config {
         let system_code = match system_type {
             SystemType::Single => {
                 let run_code = quote! {
-                            #purge_init
-                            for (#(#foreach_names,)*) in (#(#join_names,)*).join() {
-                                #purge_push
-                                #func_call
-                            }
-                            #purge_done
+                    (#(#join_names,)*).join().for_each(|#(#foreach_names,)*| {
+                        #func_call
+                    });
+                    #purge_code
                 };
                 let run_code = if self.dynamic {
                     quote! {

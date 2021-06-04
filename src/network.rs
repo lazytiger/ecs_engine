@@ -37,9 +37,27 @@ impl Connection {
         }
     }
 
-    fn send(&mut self, _data: Vec<u8>) {}
+    fn reregister(&mut self, registry: &Registry) {}
 
-    fn do_event(&mut self, _event: &Event, _registry: &Registry) {}
+    fn send(&mut self, data: Vec<u8>) {}
+
+    fn do_event(&mut self, event: &Event, registry: &Registry) {
+        if event.is_read_closed() {
+        } else if event.is_readable() {
+            self.do_read();
+        }
+
+        if event.is_write_closed() {
+        } else if event.is_writable() {
+            self.do_write();
+        }
+
+        self.reregister(registry);
+    }
+
+    fn do_read(&mut self) {}
+
+    fn do_write(&mut self) {}
 }
 
 pub type NetworkData = (usize, Vec<u8>);
@@ -48,7 +66,7 @@ struct Listener {
     listener: TcpListener,
     conns: Slab<Connection>,
     sender: Sender<NetworkData>,
-    receiver: Receiver<NetworkData>,
+    receiver: Option<Receiver<NetworkData>>,
 }
 
 impl Listener {
@@ -62,7 +80,7 @@ impl Listener {
             listener,
             conns: Slab::with_capacity(capacity),
             sender,
-            receiver,
+            receiver: Some(receiver),
         }
     }
 
@@ -97,14 +115,15 @@ impl Listener {
     }
 
     pub fn do_send(&mut self) {
-        let data: Vec<NetworkData> = self.receiver.try_iter().collect();
-        for (token, data) in data {
+        let receiver = self.receiver.take().unwrap();
+        receiver.try_iter().for_each(|(token, data)| {
             if let Some(conn) = self.conns.get_mut(token) {
                 conn.send(data);
             } else {
                 log::error!("connection:{} not found", token);
             }
-        }
+        });
+        self.receiver.replace(receiver);
     }
 }
 

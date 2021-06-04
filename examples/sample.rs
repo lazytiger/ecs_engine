@@ -1,6 +1,6 @@
 use specs::{
-    BitSet, DispatcherBuilder, Entities, Join, Read, ReadStorage, System, World, WorldExt, Write,
-    WriteStorage,
+    BitSet, Component, DispatcherBuilder, Entities, HashMapStorage, Join, Read, ReadStorage,
+    System, World, WorldExt, Write, WriteStorage,
 };
 
 use ecs_engine::{ChangeSet, DynamicManager, DynamicSystem, Mutable, SerDe};
@@ -28,6 +28,12 @@ pub struct GuildMember {
     pub role: u8,
 }
 
+#[derive(Component)]
+#[storage(HashMapStorage)]
+pub struct UserInput {
+    pub name: String,
+}
+
 pub type UserTestFn = fn(&UserInfo, &BagInfo, &usize);
 
 fn test(_a: &UserInfo, _b: &BagInfo, _c: &usize) {}
@@ -51,6 +57,7 @@ impl UserTestSystem {
     ) {
         world.register::<UserInfoMut>();
         world.register::<BagInfoMut>();
+        world.register::<UserInput>();
         self.lib.init("".into(), "".into(), dm);
         builder.add(self, "user_test", &[]);
     }
@@ -58,20 +65,26 @@ impl UserTestSystem {
 
 impl<'a> System<'a> for UserTestSystem {
     type SystemData = (
+        WriteStorage<'a, UserInput>,
         ReadStorage<'a, UserInfoMut>,
         ReadStorage<'a, BagInfoMut>,
         Read<'a, DynamicManager>,
         Write<'a, usize>,
+        Entities<'a>,
     );
 
-    fn run(&mut self, (user, bag, dm, mut size): Self::SystemData) {
+    fn run(&mut self, (mut input, user, bag, dm, mut size, entities): Self::SystemData) {
         if let Some(symbol) = self.lib.get_symbol(&dm) {
-            for (user, bag) in (&user, &bag).join() {
+            (&user, &bag).join().for_each(|(user, bag)| {
                 (*symbol)(user, bag, &mut size);
-            }
+            });
         } else {
             log::error!("symbol not found");
         }
+        let es: Vec<_> = (&entities, &input).join().map(|(e, _)| e).collect();
+        es.iter().for_each(|e| {
+            input.remove(*e);
+        });
     }
 }
 
@@ -198,25 +211,5 @@ impl MyTest {
 
     pub fn age(&self) -> u8 {
         self.age
-    }
-}
-
-impl MyTest {
-    pub fn foreach_change<T, S>(&self, callback: T)
-    where
-        T: Fn(u128, &dyn SerDe),
-    {
-        let mut mask = self._mask;
-        for i in 0..10 {
-            if mask & 0x1 == 0 {
-                continue;
-            }
-            mask >>= 1;
-            match i {
-                0 => callback(i, &self.age),
-                1 => callback(i, &self.gender),
-                _ => unreachable!(),
-            }
-        }
     }
 }
