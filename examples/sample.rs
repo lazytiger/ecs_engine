@@ -1,29 +1,29 @@
 use specs::{
-    BitSet, Component, DispatcherBuilder, Entities, HashMapStorage, Join, Read, ReadStorage,
-    System, World, WorldExt, Write, WriteStorage,
+    BitSet, Component, DenseVecStorage, DispatcherBuilder, Entities, HashMapStorage, Join, Read,
+    ReadStorage, System, World, WorldExt, Write, WriteStorage,
 };
 
-use ecs_engine::{ChangeSet, DynamicManager, DynamicSystem, Mutable, SerDe};
+use ecs_engine::{Changeset, DynamicManager, DynamicSystem, SerDe};
 use specs::world::Index;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Component)]
 pub struct UserInfo {
     pub name: String,
     pub guild_id: Index,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Component)]
 pub struct GuildInfo {
     users: BitSet,
     pub name: String,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Component)]
 pub struct BagInfo {
     pub items: Vec<String>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Component)]
 pub struct GuildMember {
     pub role: u8,
 }
@@ -42,11 +42,8 @@ static _T: UserTestFn = test;
 
 #[derive(Default)]
 struct UserTestSystem {
-    lib: DynamicSystem<fn(&UserInfo, &BagInfo, &usize)>,
+    lib: DynamicSystem<fn(&UserInput, &BagInfo, &usize) -> Option<UserInfo>>,
 }
-
-pub type UserInfoMut = Mutable<UserInfo, 1>;
-pub type BagInfoMut = Mutable<BagInfo, 2>;
 
 impl UserTestSystem {
     pub fn setup(
@@ -55,8 +52,8 @@ impl UserTestSystem {
         builder: &mut DispatcherBuilder,
         dm: &DynamicManager,
     ) {
-        world.register::<UserInfoMut>();
-        world.register::<BagInfoMut>();
+        world.register::<UserInfo>();
+        world.register::<BagInfo>();
         world.register::<UserInput>();
         self.lib.init("".into(), "".into(), dm);
         builder.add(self, "user_test", &[]);
@@ -66,18 +63,22 @@ impl UserTestSystem {
 impl<'a> System<'a> for UserTestSystem {
     type SystemData = (
         WriteStorage<'a, UserInput>,
-        ReadStorage<'a, UserInfoMut>,
-        ReadStorage<'a, BagInfoMut>,
+        WriteStorage<'a, UserInfo>,
+        ReadStorage<'a, BagInfo>,
         Read<'a, DynamicManager>,
         Write<'a, usize>,
         Entities<'a>,
     );
 
-    fn run(&mut self, (mut input, user, bag, dm, mut size, entities): Self::SystemData) {
+    fn run(&mut self, (mut input, mut user, bag, dm, mut size, entities): Self::SystemData) {
         if let Some(symbol) = self.lib.get_symbol(&dm) {
-            (&user, &bag).join().for_each(|(user, bag)| {
-                (*symbol)(user, bag, &mut size);
-            });
+            (&input, &bag, &entities)
+                .join()
+                .for_each(|(input, bag, entity)| {
+                    if let Some(u) = symbol(&input, bag, &mut size) {
+                        user.insert(entity, u);
+                    }
+                });
         } else {
             log::error!("symbol not found");
         }
@@ -100,24 +101,21 @@ impl GuildTestSystem {
         builder: &mut DispatcherBuilder,
         dm: &DynamicManager,
     ) {
-        world.register::<UserInfoMut>();
-        world.register::<GuildInfoMut>();
-        world.register::<GuildMemberMut>();
+        world.register::<UserInfo>();
+        world.register::<GuildInfo>();
+        world.register::<GuildMember>();
         self.lib.init("".into(), "".into(), dm);
         builder.add(self, "guild_test", &[]);
     }
 }
 
-pub type GuildInfoMut = Mutable<GuildInfo, 3>;
-pub type GuildMemberMut = Mutable<GuildMember, 4>;
-
 impl<'a> System<'a> for GuildTestSystem {
     type SystemData = (
         Entities<'a>,
         Read<'a, DynamicManager>,
-        ReadStorage<'a, UserInfoMut>,
-        ReadStorage<'a, GuildInfoMut>,
-        WriteStorage<'a, GuildMemberMut>,
+        ReadStorage<'a, UserInfo>,
+        ReadStorage<'a, GuildInfo>,
+        WriteStorage<'a, GuildMember>,
     );
 
     fn run(&mut self, (entities, dm, user, guild, mut member_storage): Self::SystemData) {
@@ -125,7 +123,7 @@ impl<'a> System<'a> for GuildTestSystem {
             for (entity, user) in (&entities, &user).join() {
                 if let Some(guild) = guild.get(entity) {
                     if let Some(member) = (*symbol)(user, guild) {
-                        if let Err(err) = member_storage.insert(entity, Mutable::new(member)) {
+                        if let Err(err) = member_storage.insert(entity, member) {
                             log::error!("insert component failed:{}", err);
                         }
                     }
@@ -177,20 +175,6 @@ struct MyTest {
     age: u8,
     profession: u8,
     _mask: u128,
-}
-
-impl ChangeSet for MyTest {
-    fn index() -> usize {
-        0
-    }
-
-    fn mask(&self) -> u128 {
-        self._mask
-    }
-
-    fn reset(&mut self) {
-        self._mask = 0;
-    }
 }
 
 impl MyTest {
