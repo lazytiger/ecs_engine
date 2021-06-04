@@ -269,9 +269,8 @@ where
 }
 
 pub trait ChangeSet {
-    fn index() -> usize;
     fn mask(&self) -> u128;
-    fn reset(&mut self);
+    fn mask_mut(&mut self) -> &mut u128;
 }
 
 pub trait SerDe {

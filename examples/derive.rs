@@ -1,4 +1,4 @@
-use codegen::{export, system, ChangeSet};
+use codegen::{changeset, export, system};
 use ecs_engine::DynamicManager;
 use specs::{
     world::Index, BitSet, Component, DispatcherBuilder, HashMapStorage, Join, LazyUpdate, World,
@@ -92,13 +92,6 @@ fn main() {
     world.maintain();
 }
 
-#[derive(ChangeSet)]
-struct MyTest {
-    name: String,
-    age: u8,
-    sex: u8,
-}
-
 #[export(UserDeriveSystemFn)]
 fn user_derive_test(
     user: &UserInput,
@@ -107,4 +100,11 @@ fn user_derive_test(
     re: &mut String,
 ) -> Option<UserInfo> {
     None
+}
+
+#[changeset]
+pub struct MyTest {
+    pub name: String,
+    age: u8,
+    sex: u8,
 }
