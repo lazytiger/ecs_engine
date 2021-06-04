@@ -404,6 +404,7 @@ impl Config {
         let mut join_names = Vec::new();
         // names for foreach
         let mut foreach_names = Vec::new();
+        let mut input_storage = quote!();
 
         for param in &self.signature.parameters {
             match param {
@@ -469,12 +470,17 @@ impl Config {
                     }
                 }
                 Parameter::Input(vname) => {
-                    if let Some(input) = &self.signature.input {
-                        fn_inputs.push(quote!(#input));
+                    if let Some(ty) = &self.signature.input {
+                        let tname = component_type_to_string(ty)?;
+                        components.push(format_ident!("{}", tname));
+                        fn_inputs.push(quote!(&#ty));
                         let jname = format_ident!("j{}", vname);
                         join_names.push(quote!(&#jname));
                         func_names.push(quote!(&#vname));
                         foreach_names.push(vname.clone());
+                        input_names.push(quote!(mut #jname));
+                        input_storage = quote!(#jname);
+                        system_data.push(quote!(::specs::WriteStorage<'a, #ty>))
                     }
                 }
                 Parameter::Entity(vname) => {
@@ -512,7 +518,9 @@ impl Config {
             output_types.push(mut_ident);
         }
 
-        if !self.signature.outputs.is_empty() && !self.signature.has_entity() {
+        if (!self.signature.outputs.is_empty() || self.signature.input.is_some())
+            && !self.signature.has_entity()
+        {
             system_data.push(quote!(::specs::Entities<'a>));
             let vname = format_ident!("entity");
             let jname = format_ident!("j{}", vname);
@@ -551,6 +559,19 @@ impl Config {
             (quote!(), quote!(), static_call)
         };
 
+        let (purge_init, purge_push, purge_done) = if self.signature.input.is_some() {
+            let init = quote!(let mut ev = Vec::new(););
+            let push = quote!(ev.push(entity););
+            let purge = quote! {
+                for e in ev {
+                    #input_storage.remove(e);
+                }
+            };
+            (init, push, purge)
+        } else {
+            (quote!(), quote!(), quote!())
+        };
+
         let system_setup = quote! {
             #dynamic_fn
 
@@ -580,8 +601,10 @@ impl Config {
             SystemType::Single => {
                 let run_code = quote! {
                             #(let mut #output_vectors = Vec::new();)*
+                            #purge_init
                             for (#(#foreach_names,)*) in (#(#join_names,)*).join() {
-                               #func_call
+                                #purge_push
+                                #func_call
                             }
                             #(
                                 for (entity, #output_vnames) in #output_vectors {
@@ -590,6 +613,7 @@ impl Config {
                                     }
                                 }
                             )*
+                            #purge_done
                 };
                 let run_code = if self.dynamic {
                     quote! {

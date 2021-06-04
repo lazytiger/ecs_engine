@@ -1,6 +1,9 @@
 use codegen::{export, system, ChangeSet};
 use ecs_engine::DynamicManager;
-use specs::{world::Index, BitSet, DispatcherBuilder, Join, LazyUpdate, World, WorldExt};
+use specs::{
+    world::Index, BitSet, Component, DispatcherBuilder, HashMapStorage, Join, LazyUpdate, World,
+    WorldExt,
+};
 
 #[derive(Clone, Default)]
 pub struct UserInfo {
@@ -24,9 +27,16 @@ pub struct GuildMember {
     pub role: u8,
 }
 
+#[derive(Component)]
+#[storage(HashMapStorage)]
+pub struct UserInput {
+    name: String,
+}
+
 #[system]
 #[dynamic(user)]
 fn user_derive(
+    #[input] input: &UserInput,
     user: &UserInfo,
     bag: &mut BagInfo,
     #[state] other: &mut usize,
