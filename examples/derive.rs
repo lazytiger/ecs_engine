@@ -37,7 +37,6 @@ pub struct UserInput {
 #[dynamic(user)]
 fn user_derive(
     #[input] input: &UserInput,
-    user: &UserInfo,
     bag: &mut BagInfo,
     #[state] other: &mut usize,
     #[resource] re: &mut String,
@@ -102,8 +101,8 @@ struct MyTest {
 
 #[export(UserDeriveSystemFn)]
 fn user_derive_test(
-    user: &UserInfo,
-    bag: &mut BagInfo,
+    user: &UserInput,
+    bag: &mut BagInfoMut,
     other: &mut usize,
     re: &mut String,
 ) -> Option<UserInfo> {

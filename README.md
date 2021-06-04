@@ -526,3 +526,6 @@ TBD
 ## 背包
 ## 工会
 ## 大世界移动
+
+TBD
+同一个component不能同时出现在input和output里，加上这个检查

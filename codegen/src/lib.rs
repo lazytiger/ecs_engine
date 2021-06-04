@@ -333,7 +333,17 @@ impl Config {
         if contains_duplicate(&self.signature.state_args) {
             return Err(Error::DuplicateStateType);
         }
-
+        let mut components = self.signature.component_args.clone();
+        self.signature
+            .outputs
+            .iter()
+            .for_each(|ty| components.push(ty.clone()));
+        if let Some(t) = &self.signature.input {
+            components.push(t.clone());
+        }
+        if contains_duplicate(&components) {
+            return Err(Error::DuplicateComponentType);
+        }
         Ok(())
     }
 
@@ -506,8 +516,8 @@ impl Config {
                     new_mutable_names.push(mut_ident.clone());
                     new_components.push(format_ident!("{}", tname));
                 }
-                system_data.push(quote!(::specs::WriteStorage<'a, #typ>));
-                input_names.push(quote!(mut vname));
+                system_data.push(quote!(::specs::WriteStorage<'a, #mut_ident>));
+                input_names.push(quote!(mut #vname));
                 output_snames.push(vname.clone());
             } else {
                 output_snames.push(format_ident!("j{}", vname));
@@ -990,13 +1000,14 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
         let attr = parse_macro_input!(attr as Meta);
         let fn_type = attr.path().clone();
         let type_name = format_ident!("__FN_{}", name.clone().to_string().to_uppercase());
-        quote!(static #type_name:#fn_type = #pname)
+        quote!(static #type_name:#fn_type = #pname;)
     };
 
     let code = quote! {
         #[no_mangle]
         extern "C" #pinput
         #input
+        #fn_check
     };
     code.into()
 }
