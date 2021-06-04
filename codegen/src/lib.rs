@@ -10,31 +10,6 @@ use syn::{
     Signature, Type, TypePath, VisPublic, Visibility,
 };
 
-lazy_static::lazy_static! {
-    static ref COMPONENT_INDEX_MAP: HashMap<String, usize> = {
-        HashMap::with_capacity(1024).into()
-    };
-}
-
-#[allow(mutable_transmutes)]
-fn get_component_index(name: &String) -> usize {
-    unsafe {
-        let map: &HashMap<String, usize> = &COMPONENT_INDEX_MAP;
-        let map: &mut HashMap<String, usize> = std::mem::transmute(map);
-        if let Some(index) = map.get(name) {
-            *index
-        } else {
-            let index = map.len();
-            map.insert(name.clone(), index);
-            index
-        }
-    }
-}
-
-fn component_exists(name: &String) -> bool {
-    COMPONENT_INDEX_MAP.contains_key(name)
-}
-
 #[derive(thiserror::Error, Debug)]
 enum Error {
     #[error("duplicate output type found")]
@@ -84,7 +59,9 @@ enum Error {
     )]
     InvalidReturnType(Span),
     #[error("Changeset only support no more than 126 fields")]
-    MaxFieldsExceeds,
+    MaxFieldNumberExceeds,
+    #[error("component number should not greater than 1024")]
+    MaxComponentNumberExceeds,
 }
 
 impl Error {
@@ -194,19 +171,6 @@ fn lit_to_ident(lit: &Lit) -> Result<Ident, Error> {
         _ => return Err(Error::InvalidLiteralFoundForName(lit.span())),
     };
     Ok(Ident::new(&name, span))
-}
-
-fn component_type_to_string(ty: &Type) -> Result<String, Error> {
-    match ty {
-        Type::Path(path) => {
-            if path.path.segments.len() > 1 || path.qself.is_some() {
-                Err(Error::InvalidComponentType(ty.span()))
-            } else {
-                Ok(path.path.segments[0].ident.to_string())
-            }
-        }
-        _ => Err(Error::InvalidComponentType(Span::call_site())),
-    }
 }
 
 fn contains_duplicate(data: &Vec<Type>) -> bool {
@@ -382,29 +346,19 @@ impl Config {
         };
 
         // all components should be registered
-        let mut components = Vec::new();
-        // all components had not been defined
-        let mut new_components = Vec::new();
-        // index for all components had not been defined
-        let mut new_indexes = Vec::new();
-        // alias name for all components had not been defined
-        let mut new_mutable_names = Vec::new();
-        // alias index name for all components had not been defined
-        let mut new_index_names = Vec::new();
+        let mut component_types = Vec::new();
         // field names
         let mut state_names = Vec::new();
         // field types
-        let mut states = Vec::new();
+        let mut state_types = Vec::new();
         // SystemData types
-        let mut system_data = Vec::new();
+        let mut system_data_types = Vec::new();
         // function input types
-        let mut fn_inputs = Vec::new();
+        let mut fn_input_types = Vec::new();
         // function output types
-        let mut fn_outputs = Vec::new();
+        let mut fn_output_types = Vec::new();
         // function output names
         let mut output_vnames = Vec::new();
-        // Mutable alias types for output type
-        let mut output_types = Vec::new();
         // storage names for output types
         let mut output_snames = Vec::new();
         // names for all input parameters
@@ -421,45 +375,37 @@ impl Config {
             match param {
                 Parameter::Component(vname, index, mutable) => {
                     let ty = self.signature.component_args[*index].clone();
-                    let tname = component_type_to_string(&ty)?;
-                    let mut_ident = format_ident!("{}Mut", tname);
-                    components.push(mut_ident.clone());
-                    if !component_exists(&tname) {
-                        new_indexes.push(get_component_index(&tname));
-                        new_index_names.push(format_ident!("{}Index", tname));
-                        new_mutable_names.push(mut_ident.clone());
-                        new_components.push(format_ident!("{}", tname));
-                    }
+                    component_types.push(ty.clone());
                     func_names.push(quote!(#vname));
                     let jname = format_ident!("j{}", vname);
                     foreach_names.push(vname.clone());
                     if *mutable {
                         join_names.push(quote!(&mut #jname));
-                        fn_inputs.push(quote!(&mut #mut_ident));
+                        fn_input_types.push(quote!(&mut #ty));
                     } else {
                         join_names.push(quote!(&#jname));
-                        fn_inputs.push(quote!(&#ty));
+                        fn_input_types.push(quote!(&#ty));
                     }
                     if *mutable || self.signature.is_return_type(&ty) {
-                        let data = quote!(::specs::WriteStorage<'a, #mut_ident>);
-                        system_data.push(data);
+                        let data = quote!(::specs::WriteStorage<'a, #ty>);
+                        system_data_types.push(data);
                         input_names.push(quote!(mut #jname));
                     } else {
-                        let data = quote!(::specs::ReadStorage<'a, #mut_ident>);
-                        system_data.push(data);
+                        let data = quote!(::specs::ReadStorage<'a, #ty>);
+                        system_data_types.push(data);
                         input_names.push(quote!(#jname));
                     };
                 }
                 Parameter::State(vname, index, mutable) => {
                     let ty = self.signature.state_args[*index].clone();
                     state_names.push(vname.clone());
-                    states.push(ty.clone());
+                    state_types.push(ty.clone());
                     if *mutable {
                         func_names.push(quote!(&mut self.#vname));
-                        fn_inputs.push(quote!(&mut #ty));
+                        fn_input_types.push(quote!(&mut #ty));
                     } else {
                         func_names.push(quote!(&self.#vname));
-                        fn_inputs.push(quote!(&#ty));
+                        fn_input_types.push(quote!(&#ty));
                     }
                 }
                 Parameter::Resource(vname, index, mutable) => {
@@ -469,37 +415,36 @@ impl Config {
                     } else {
                         quote!(::specs::Read<'a, #ty>)
                     };
-                    system_data.push(data);
+                    system_data_types.push(data);
                     if *mutable {
                         func_names.push(quote!(&mut #vname));
                         input_names.push(quote!(mut #vname));
-                        fn_inputs.push(quote!(&mut #ty));
+                        fn_input_types.push(quote!(&mut #ty));
                     } else {
                         func_names.push(quote!(&#vname));
                         input_names.push(quote!(#vname));
-                        fn_inputs.push(quote!(&#ty));
+                        fn_input_types.push(quote!(&#ty));
                     }
                 }
                 Parameter::Input(vname) => {
                     if let Some(ty) = &self.signature.input {
-                        let tname = component_type_to_string(ty)?;
-                        components.push(format_ident!("{}", tname));
-                        fn_inputs.push(quote!(&#ty));
+                        component_types.push(ty.clone());
+                        fn_input_types.push(quote!(&#ty));
                         let jname = format_ident!("j{}", vname);
                         join_names.push(quote!(&#jname));
-                        func_names.push(quote!(&#vname));
+                        func_names.push(quote!(#vname));
                         foreach_names.push(vname.clone());
                         input_names.push(quote!(mut #jname));
                         input_storage = quote!(#jname);
-                        system_data.push(quote!(::specs::WriteStorage<'a, #ty>))
+                        system_data_types.push(quote!(::specs::WriteStorage<'a, #ty>))
                     }
                 }
                 Parameter::Entity(vname) => {
                     let jname = format_ident!("j{}", vname);
                     join_names.push(quote!(&#jname));
                     input_names.push(quote!(#jname));
-                    fn_inputs.push(quote!(&::specs::Entity));
-                    system_data.push(quote!(::specs::Entities<'a>));
+                    fn_input_types.push(quote!(&::specs::Entity));
+                    system_data_types.push(quote!(::specs::Entities<'a>));
                     foreach_names.push(vname.clone());
                     func_names.push(quote!(&#vname));
                 }
@@ -508,26 +453,18 @@ impl Config {
 
         for (i, typ) in self.signature.outputs.iter().enumerate() {
             let vname = &self.signature.output_names[i];
-            let tname = component_type_to_string(&typ)?;
-            let mut_ident = format_ident!("{}Mut", tname);
-            if !component_exists(&tname) {
-                new_indexes.push(get_component_index(&tname));
-                new_index_names.push(format_ident!("{}Index", tname));
-                new_mutable_names.push(mut_ident.clone());
-                new_components.push(format_ident!("{}", tname));
-            }
-            system_data.push(quote!(::specs::WriteStorage<'a, #mut_ident>));
+            system_data_types.push(quote!(::specs::WriteStorage<'a, #typ>));
             input_names.push(quote!(mut #vname));
             output_snames.push(vname.clone());
-            fn_outputs.push(quote!(Option<#typ>));
+            fn_output_types.push(quote!(Option<#typ>));
             output_vnames.push(format_ident!("r{}", i));
-            output_types.push(mut_ident);
+            component_types.push(typ.clone());
         }
 
         if (!self.signature.outputs.is_empty() || self.signature.input.is_some())
             && !self.signature.has_entity()
         {
-            system_data.push(quote!(::specs::Entities<'a>));
+            system_data_types.push(quote!(::specs::Entities<'a>));
             let vname = format_ident!("entity");
             let jname = format_ident!("j{}", vname);
             foreach_names.push(vname);
@@ -537,20 +474,20 @@ impl Config {
 
         let output_code = quote! {
            #(if let Some(#output_vnames) = #output_vnames{
-                if let Err(err) = #output_snames.insert(entity, #output_types::new(#output_vnames)) {
+                if let Err(err) = #output_snames.insert(entity, #output_vnames) {
                     log::error!("insert component failed {}", err);
                 }
             })*
         };
 
         let (dynamic_init, dynamic_fn, func_call) = if self.dynamic {
-            system_data.push(quote!(::specs::Read<'a, ::ecs_engine::DynamicManager>));
+            system_data_types.push(quote!(::specs::Read<'a, ::ecs_engine::DynamicManager>));
             state_names.push(format_ident!("lib"));
-            states.push(parse_quote!(::ecs_engine::DynamicSystem<fn(#(#fn_inputs,)*) -> ::std::thread::Result<(#(#fn_outputs),*)>>));
+            state_types.push(parse_quote!(::ecs_engine::DynamicSystem<fn(#(#fn_input_types,)*) -> ::std::thread::Result<(#(#fn_output_types),*)>>));
             input_names.push(quote!(dm));
             let dynamic_init = quote!(self.lib.init(#lib_name.into(), #func_name.into(), dm););
             let dynamic_fn =
-                quote!(pub type #system_fn = fn(#(#fn_inputs,)*) ->(#(#fn_outputs),*););
+                quote!(pub type #system_fn = fn(#(#fn_input_types,)*) ->(#(#fn_output_types),*););
             let dynamic_call = quote! {
                 match {(*symbol)(#(#func_names,)*)} {
                     Err(err)  => log::error!("call dynamic function {} panic {:?}", #func_name, err),
@@ -585,14 +522,12 @@ impl Config {
 
             #[derive(Default)]
             pub struct #system_name {
-                #(#state_names:#states,)*
+                #(#state_names:#state_types,)*
             }
 
-            #(pub const #new_index_names :usize = #new_indexes;)*
-            #(pub type #new_mutable_names = ::ecs_engine::Mutable<#new_components, #new_indexes>;)*
             impl #system_name {
                     pub fn setup(mut self, world: &mut ::specs::World, builder: &mut ::specs::DispatcherBuilder, dm: &::ecs_engine::DynamicManager) {
-                        #(world.register::<#components>();)*
+                        #(world.register::<#component_types>();)*
                         #dynamic_init
                         builder.add(self, #func_name, &[]);
                     }
@@ -629,7 +564,7 @@ impl Config {
                 quote! {
                     impl<'a> ::specs::System<'a> for #system_name {
                         type SystemData = (
-                            #(#system_data,)*
+                            #(#system_data_types,)*
                         );
 
                         fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
@@ -1006,12 +941,20 @@ fn is_primitive(ty: &Type) -> bool {
     false
 }
 
+const MAX_COMPONENTS: usize = 1024;
+
 #[proc_macro_attribute]
 pub fn changeset(attr: TokenStream, item: TokenStream) -> TokenStream {
     static mut COUNTER: usize = 0;
+
+    let index = unsafe { COUNTER };
+    if index >= MAX_COMPONENTS {
+        return Error::MaxComponentNumberExceeds.emit().into();
+    }
+
     let mut input = parse_macro_input!(item as ItemStruct);
     if input.fields.len() > 126 {
-        return Error::MaxFieldsExceeds.emit().into();
+        return Error::MaxFieldNumberExceeds.emit().into();
     }
 
     input.vis = Visibility::Public(VisPublic {
@@ -1052,7 +995,6 @@ pub fn changeset(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => unreachable!(),
     }
 
-    let index = unsafe { COUNTER };
     let impl_code = quote! {
         impl #name {
             #(

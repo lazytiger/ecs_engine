@@ -152,83 +152,7 @@ impl<T> DynamicSystem<T> {
     }
 }
 
-pub enum MutableStatus {
-    Loaded,
-    Modified,
-    Created,
-    Deleted,
-}
-
-pub struct Mutable<T, const N: usize> {
-    status: MutableStatus,
-    old: Option<T>,
-    curr: T,
-}
-
-impl<T, const N: usize> Deref for Mutable<T, N> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.curr
-    }
-}
-
-impl<T, const N: usize> Mutable<T, N>
-where
-    T: Clone,
-    T: Default,
-{
-    pub fn new(t: T) -> Self {
-        Self {
-            old: None,
-            curr: t,
-            status: MutableStatus::Loaded,
-        }
-    }
-
-    pub fn create(mut self) -> Self {
-        self.status = MutableStatus::Created;
-        self
-    }
-
-    pub fn delete(mut self) -> Self {
-        self.status = MutableStatus::Deleted;
-        self
-    }
-
-    pub fn get_mut(&mut self) -> &mut T {
-        if let None = self.old {
-            self.old.replace(self.curr.clone());
-        }
-        MODS[N].store(true, Ordering::Relaxed);
-        &mut self.curr
-    }
-
-    pub fn diff(&self) -> Vec<u8> {
-        todo!()
-    }
-}
-
-impl<T, const N: usize> Mutable<T, N> {
-    #[inline]
-    pub fn modified() -> bool {
-        MODS[N].load(Ordering::Relaxed)
-    }
-
-    #[inline]
-    pub fn reset() {
-        MODS[N].store(false, Ordering::Relaxed);
-    }
-}
-
-impl<T, const N: usize> Component for Mutable<T, N>
-where
-    T: 'static + Send + Sync,
-{
-    type Storage = VecStorage<Mutable<T, N>>;
-}
-
-pub const MAX_COMPONENTS: usize = 1024;
+const MAX_COMPONENTS: usize = 1024;
 
 lazy_static::lazy_static! {
     pub static ref MODS:Vec<AtomicBool> = {
@@ -240,31 +164,52 @@ lazy_static::lazy_static! {
     };
 }
 
-pub struct CommitChangeSystem<T, const N: usize, const M: usize> {
+pub struct CommitChangeSystem<T> {
+    tick_step: usize,
     counter: usize,
     _phantom: PhantomData<T>,
 }
 
-impl<'a, T, const N: usize, const M: usize> System<'a> for CommitChangeSystem<T, N, M>
+impl<T> CommitChangeSystem<T> {
+    fn new(tick_step: usize) -> Self {
+        Self {
+            tick_step,
+            counter: 0,
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<T> Default for CommitChangeSystem<T> {
+    fn default() -> Self {
+        Self::new(1)
+    }
+}
+
+impl<'a, T> System<'a> for CommitChangeSystem<T>
 where
-    Mutable<T, N>: Component,
+    T: Component,
+    T: Changeset,
 {
-    type SystemData = (WriteStorage<'a, Mutable<T, N>>,);
+    type SystemData = (WriteStorage<'a, T>,);
 
     fn run(&mut self, (data,): Self::SystemData) {
         self.counter += 1;
-        if self.counter != M {
+        if self.counter != self.tick_step {
             return;
         } else {
             self.counter = 0;
         }
-        if !Mutable::<T, N>::modified() {
+        if !T::is_storage_dirty() {
             return;
         }
-        for (_data,) in (&data,).join() {
-            todo!()
+
+        for (data,) in (&data,).join() {
+            if !data.is_dirty() {
+                continue;
+            }
         }
-        Mutable::<T, N>::reset();
+        T::clear_storage_dirty();
     }
 }
 
@@ -276,6 +221,11 @@ pub trait Changeset {
     fn mask(&self) -> u128;
     fn mask_mut(&mut self) -> &mut u128;
     fn index() -> usize;
+
+    #[inline]
+    fn is_dirty(&self) -> bool {
+        self.mask() != 0
+    }
 
     #[inline]
     fn mask_new(&mut self) {

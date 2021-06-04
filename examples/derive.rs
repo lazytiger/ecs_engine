@@ -1,28 +1,28 @@
 use codegen::{changeset, export, system};
 use ecs_engine::DynamicManager;
 use specs::{
-    world::Index, BitSet, Component, DispatcherBuilder, HashMapStorage, Join, LazyUpdate,
-    VecStorage, World, WorldExt,
+    world::Index, BitSet, Component, DenseVecStorage, DispatcherBuilder, HashMapStorage, Join,
+    LazyUpdate, VecStorage, World, WorldExt,
 };
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Component)]
 pub struct UserInfo {
     pub name: String,
     pub guild_id: Index,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Component)]
 pub struct GuildInfo {
     users: BitSet,
     pub name: String,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Component)]
 pub struct BagInfo {
     pub items: Vec<String>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Component)]
 pub struct GuildMember {
     pub role: u8,
 }
@@ -95,7 +95,7 @@ fn main() {
 #[export(UserDeriveSystemFn)]
 fn user_derive_test(
     user: &UserInput,
-    bag: &mut BagInfoMut,
+    bag: &mut BagInfo,
     other: &mut usize,
     re: &mut String,
 ) -> Option<UserInfo> {
