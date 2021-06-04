@@ -268,9 +268,25 @@ where
     }
 }
 
+// mask的最高两位表示修改状态
+// 00 表示修改
+// 10 表示新建
+// 11 表示删除
 pub trait Changeset {
     fn mask(&self) -> u128;
     fn mask_mut(&mut self) -> &mut u128;
+    fn mask_new(&mut self) {
+        *self.mask_mut() |= 0x80000000;
+    }
+    fn mask_del(&mut self) {
+        *self.mask_mut() |= 0xc0000000;
+    }
+    fn is_new(&self) -> bool {
+        self.mask() & 0x80000000 != 0
+    }
+    fn is_del(&self) -> bool {
+        self.mask() & 0xc0000000 != 0
+    }
 }
 
 pub trait SerDe {

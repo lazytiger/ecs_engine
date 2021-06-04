@@ -83,6 +83,8 @@ enum Error {
         "invalid return type only Option<Component> or tuple of Option<Component> is accepted"
     )]
     InvalidReturnType(Span),
+    #[error("Changeset only support no more than 126 fields")]
+    MaxFieldsExceeds,
 }
 
 impl Error {
@@ -1007,6 +1009,10 @@ fn is_primitive(ty: &Type) -> bool {
 #[proc_macro_attribute]
 pub fn changeset(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(item as ItemStruct);
+    if input.fields.len() > 126 {
+        return Error::MaxFieldsExceeds.emit().into();
+    }
+
     input.vis = Visibility::Public(VisPublic {
         pub_token: Pub {
             span: input.vis.span(),
