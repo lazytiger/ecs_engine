@@ -90,5 +90,12 @@ struct MyTest {
     sex: u8,
 }
 
-#[export]
-pub fn mytest(user: &UserInfo, bag: &mut BagInfo) {}
+#[export(UserDeriveSystemFn)]
+fn user_derive_test(
+    user: &UserInfo,
+    bag: &mut BagInfo,
+    other: &mut usize,
+    re: &mut String,
+) -> Option<UserInfo> {
+    None
+}

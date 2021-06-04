@@ -1,10 +1,9 @@
+use proc_macro::TokenStream;
 use std::collections::HashMap;
 
 use convert_case::{Case, Casing};
-use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
-
 use syn::{
     parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, GenericArgument, ItemFn,
     Lit, LitStr, Meta, Pat, PathArguments, ReturnType, Signature, Type, TypePath, Visibility,
@@ -522,17 +521,34 @@ impl Config {
             join_names.push(quote!(&#jname));
         }
 
-        let (dynamic_init, dynamic_fn) = if self.dynamic {
+        let (dynamic_init, dynamic_fn, func_call) = if self.dynamic {
             system_data.push(quote!(::specs::Read<'a, ::ecs_engine::DynamicManager>));
             state_names.push(format_ident!("lib"));
-            states.push(parse_quote!(::ecs_engine::DynamicSystem<#system_fn>));
+            states.push(parse_quote!(::ecs_engine::DynamicSystem<fn(#(#fn_inputs,)*) -> ::std::thread::Result<(#(#fn_outputs),*)>>));
             input_names.push(quote!(dm));
             let dynamic_init = quote!(self.lib.init(#lib_name.into(), #func_name.into(), dm););
             let dynamic_fn =
                 quote!(pub type #system_fn = fn(#(#fn_inputs,)*) ->(#(#fn_outputs),*););
-            (dynamic_init, dynamic_fn)
+            let dynamic_call = quote! {
+                match {(*symbol)(#(#func_names,)*)} {
+                    Err(err)  => log::error!("call dynamic function {} panic {:?}", #func_name, err),
+                    Ok((#(#output_vnames),*)) => {
+                        #(if let Some(#output_vnames) = #output_vnames{
+                            #output_vectors.push((entity, #output_vnames));
+                        })*
+                    }
+                }
+            };
+            (dynamic_init, dynamic_fn, dynamic_call)
         } else {
-            (quote!(), quote!())
+            let symbol = self.signature.ident.clone();
+            let static_call = quote! {
+                let (#(#output_vnames),*) = #symbol(#(#func_names,)*);
+                #(if let Some(#output_vnames) = #output_vnames{
+                    #output_vectors.push((entity, #output_vnames));
+                })*
+            };
+            (quote!(), quote!(), static_call)
         };
 
         let system_setup = quote! {
@@ -562,19 +578,10 @@ impl Config {
 
         let system_code = match system_type {
             SystemType::Single => {
-                let func = if self.dynamic {
-                    quote!((*symbol))
-                } else {
-                    let symbol = self.signature.ident.clone();
-                    quote!(#symbol)
-                };
                 let run_code = quote! {
-                   #(let mut #output_vectors = Vec::new();)*
+                            #(let mut #output_vectors = Vec::new();)*
                             for (#(#foreach_names,)*) in (#(#join_names,)*).join() {
-                                let (#(#output_vnames),*) = #func(#(#func_names,)*);
-                                #(if let Some(#output_vnames) = #output_vnames{
-                                    #output_vectors.push((entity, #output_vnames));
-                                })*
+                               #func_call
                             }
                             #(
                                 for (entity, #output_vnames) in #output_vectors {
@@ -911,7 +918,9 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
     let pname = format_ident!("__private_{}", name);
 
     let mut pinput = input.clone();
-    let mut inputs = Vec::new();
+    let mut call_names = Vec::new();
+    let mut input_names = Vec::new();
+    let mut input_types = Vec::new();
     for param in &mut pinput.sig.inputs {
         match param {
             FnArg::Typed(pt) => {
@@ -919,14 +928,16 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
                     Pat::Ident(ident) => ident.ident.clone(),
                     _ => unreachable!(),
                 };
+                call_names.push(name.clone());
                 match pt.ty.as_mut() {
                     Type::Reference(r) => {
                         if r.mutability.is_some() {
-                            inputs.push(quote!(unsafe {::std::mem::transmute(#name)}));
+                            input_names.push(quote!(unsafe {::std::mem::transmute(#name)}));
                         } else {
-                            inputs.push(quote!(#name));
+                            input_names.push(quote!(#name));
                         }
                         r.mutability = None;
+                        input_types.push(pt.ty.as_ref().clone());
                     }
                     _ => unreachable!(),
                 }
@@ -934,11 +945,29 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
             _ => unreachable!(),
         }
     }
-    pinput.block = parse_quote!({
-        ::std::panic::catch_unwind(|| #pname(#(#inputs,)*));
-    });
 
-    input.sig.ident = pname;
+    let return_type = match &input.sig.output {
+        ReturnType::Default => quote!(()),
+        ReturnType::Type(_, ty) => {
+            let ty = ty.as_ref().clone();
+            quote!(#ty)
+        }
+    };
+    let pinput = quote! {
+        fn #name(#(#call_names:#input_types,)*) -> ::std::thread::Result<#return_type> {
+            ::std::panic::catch_unwind(||#pname(#(#input_names,)*))
+        }
+    };
+
+    input.sig.ident = pname.clone();
+    let fn_check = if attr.is_empty() {
+        quote!()
+    } else {
+        let attr = parse_macro_input!(attr as Meta);
+        let fn_type = attr.path().clone();
+        let type_name = format_ident!("__FN_{}", name.clone().to_string().to_uppercase());
+        quote!(static #type_name:#fn_type = #pname)
+    };
 
     let code = quote! {
         #[no_mangle]
