@@ -404,8 +404,6 @@ impl Config {
         let mut output_types = Vec::new();
         // storage names for output types
         let mut output_snames = Vec::new();
-        // vector names for output
-        let mut output_vectors = Vec::new();
         // names for all input parameters
         let mut input_names = Vec::new();
         // names for all function input parameters
@@ -509,22 +507,17 @@ impl Config {
             let vname = &self.signature.output_names[i];
             let tname = component_type_to_string(&typ)?;
             let mut_ident = format_ident!("{}Mut", tname);
-            if vname.to_string().starts_with('o') {
-                if !component_exists(&tname) {
-                    new_indexes.push(get_component_index(&tname));
-                    new_index_names.push(format_ident!("{}Index", tname));
-                    new_mutable_names.push(mut_ident.clone());
-                    new_components.push(format_ident!("{}", tname));
-                }
-                system_data.push(quote!(::specs::WriteStorage<'a, #mut_ident>));
-                input_names.push(quote!(mut #vname));
-                output_snames.push(vname.clone());
-            } else {
-                output_snames.push(format_ident!("j{}", vname));
+            if !component_exists(&tname) {
+                new_indexes.push(get_component_index(&tname));
+                new_index_names.push(format_ident!("{}Index", tname));
+                new_mutable_names.push(mut_ident.clone());
+                new_components.push(format_ident!("{}", tname));
             }
+            system_data.push(quote!(::specs::WriteStorage<'a, #mut_ident>));
+            input_names.push(quote!(mut #vname));
+            output_snames.push(vname.clone());
             fn_outputs.push(quote!(Option<#typ>));
             output_vnames.push(format_ident!("r{}", i));
-            output_vectors.push(format_ident!("v{}", i));
             output_types.push(mut_ident);
         }
 
@@ -539,6 +532,14 @@ impl Config {
             join_names.push(quote!(&#jname));
         }
 
+        let output_code = quote! {
+           #(if let Some(#output_vnames) = #output_vnames{
+                if let Err(err) = #output_snames.insert(entity, #output_types::new(#output_vnames)) {
+                    log::error!("insert component failed {}", err);
+                }
+            })*
+        };
+
         let (dynamic_init, dynamic_fn, func_call) = if self.dynamic {
             system_data.push(quote!(::specs::Read<'a, ::ecs_engine::DynamicManager>));
             state_names.push(format_ident!("lib"));
@@ -551,9 +552,7 @@ impl Config {
                 match {(*symbol)(#(#func_names,)*)} {
                     Err(err)  => log::error!("call dynamic function {} panic {:?}", #func_name, err),
                     Ok((#(#output_vnames),*)) => {
-                        #(if let Some(#output_vnames) = #output_vnames{
-                            #output_vectors.push((entity, #output_vnames));
-                        })*
+                        #output_code
                     }
                 }
             };
@@ -562,9 +561,7 @@ impl Config {
             let symbol = self.signature.ident.clone();
             let static_call = quote! {
                 let (#(#output_vnames),*) = #symbol(#(#func_names,)*);
-                #(if let Some(#output_vnames) = #output_vnames{
-                    #output_vectors.push((entity, #output_vnames));
-                })*
+                #output_code
             };
             (quote!(), quote!(), static_call)
         };
@@ -610,19 +607,11 @@ impl Config {
         let system_code = match system_type {
             SystemType::Single => {
                 let run_code = quote! {
-                            #(let mut #output_vectors = Vec::new();)*
                             #purge_init
                             for (#(#foreach_names,)*) in (#(#join_names,)*).join() {
                                 #purge_push
                                 #func_call
                             }
-                            #(
-                                for (entity, #output_vnames) in #output_vectors {
-                                    if let Err(err) = #output_snames.insert(entity, #output_types::new(#output_vnames)) {
-                                        log::error!("insert component failed {}", err);
-                                    }
-                                }
-                            )*
                             #purge_done
                 };
                 let run_code = if self.dynamic {
