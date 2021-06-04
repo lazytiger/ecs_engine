@@ -5,8 +5,9 @@ use convert_case::{Case, Casing};
 use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{
-    parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, GenericArgument, ItemFn,
-    Lit, LitStr, Meta, Pat, PathArguments, ReturnType, Signature, Type, TypePath, Visibility,
+    parse_macro_input, parse_quote, spanned::Spanned, token::Pub, Attribute, Field, Fields, FnArg,
+    GenericArgument, ItemFn, ItemStruct, Lit, LitStr, Meta, Pat, PathArguments, ReturnType,
+    Signature, Type, TypePath, VisPublic, Visibility,
 };
 
 lazy_static::lazy_static! {
@@ -570,9 +571,7 @@ impl Config {
             quote! {
                 let es: Vec<_> = (&jentity, &#input_storage).join().map(|(e, _)|e).collect();
                 es.iter().for_each(|e|{
-                    if let Err(err) = #input_storage.remove(*e) {
-                        log::error!("remove input component failed:{}", err);
-                    }
+                    #input_storage.remove(*e);
                 });
             }
         } else {
@@ -607,7 +606,7 @@ impl Config {
         let system_code = match system_type {
             SystemType::Single => {
                 let run_code = quote! {
-                    (#(#join_names,)*).join().for_each(|#(#foreach_names,)*| {
+                    (#(#join_names,)*).join().for_each(|(#(#foreach_names,)*)| {
                         #func_call
                     });
                     #purge_code
@@ -925,12 +924,6 @@ pub fn system(attr: TokenStream, item: TokenStream) -> TokenStream {
     code.into()
 }
 
-#[proc_macro_derive(ChangeSet)]
-pub fn derive_changeset(item: TokenStream) -> TokenStream {
-    let code = quote!();
-    TokenStream::from(code)
-}
-
 #[proc_macro_attribute]
 pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(item as ItemFn);
@@ -997,4 +990,87 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
         #fn_check
     };
     code.into()
+}
+
+fn is_primitive(ty: &Type) -> bool {
+    for sty in [
+        "u8", "u16", "u32", "u64", "u128", "usize", "bool", "char", "f32", "f64", "i8", "i16",
+        "i32", "i64", "i128", "isize",
+    ] {
+        if is_type(ty, &[sty]) {
+            return true;
+        }
+    }
+    false
+}
+
+#[proc_macro_attribute]
+pub fn changeset(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut input = parse_macro_input!(item as ItemStruct);
+    input.vis = Visibility::Public(VisPublic {
+        pub_token: Pub {
+            span: input.vis.span(),
+        },
+    });
+    input
+        .fields
+        .iter_mut()
+        .for_each(|f| f.vis = Visibility::Inherited);
+
+    let idents: Vec<_> = input
+        .fields
+        .iter()
+        .map(|f| f.ident.clone().unwrap())
+        .collect();
+    let ident_muts: Vec<_> = idents
+        .iter()
+        .map(|id| format_ident!("{}_mut", id))
+        .collect();
+    let indexes = (0..idents.len());
+    let types: Vec<_> = input.fields.iter().map(|f| f.ty.clone()).collect();
+    let types_ref: Vec<_> = types
+        .iter()
+        .map(|t| if is_primitive(t) { quote!() } else { quote!(&) })
+        .collect();
+    let name = input.ident.clone();
+    let field = Field {
+        attrs: Vec::new(),
+        vis: Visibility::Inherited,
+        ident: Some(format_ident!("mask")),
+        colon_token: None,
+        ty: parse_quote!(u128),
+    };
+    match &mut input.fields {
+        Fields::Named(named) => named.named.push(field),
+        _ => unreachable!(),
+    }
+
+    let impl_code = quote! {
+        impl #name {
+            #(
+                pub fn #idents(&self) -> #types_ref #types {
+                    #types_ref self.#idents
+                }
+
+                pub fn #ident_muts(&mut self) -> &mut #types {
+                    self.mask |= 1 << #indexes;
+                    &mut self.#idents
+                }
+            )*
+
+            pub fn mask(&self) ->u128 {
+                self.mask
+            }
+
+            pub fn mask_mut(&mut self) -> &mut u128 {
+                &mut self.mask
+            }
+        }
+    };
+
+    quote!(
+        #input
+        #impl_code
+    )
+    .into()
 }
