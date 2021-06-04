@@ -1061,7 +1061,7 @@ pub fn changeset(attr: TokenStream, item: TokenStream) -> TokenStream {
             )*
         }
 
-        impl ::ecs_engine::ChangeSet for #name {
+        impl ::ecs_engine::Changeset for #name {
             #[inline]
             fn mask(&self) ->u128 {
                 self.mask

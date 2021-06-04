@@ -268,7 +268,7 @@ where
     }
 }
 
-pub trait ChangeSet {
+pub trait Changeset {
     fn mask(&self) -> u128;
     fn mask_mut(&mut self) -> &mut u128;
 }
