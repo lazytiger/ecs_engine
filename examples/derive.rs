@@ -103,6 +103,8 @@ fn user_derive_test(
 }
 
 #[changeset]
+#[derive(Component)]
+#[storage(VecStorage)]
 pub struct MyTest {
     pub name: String,
     age: u8,
