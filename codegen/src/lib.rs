@@ -1008,6 +1008,7 @@ fn is_primitive(ty: &Type) -> bool {
 
 #[proc_macro_attribute]
 pub fn changeset(attr: TokenStream, item: TokenStream) -> TokenStream {
+    static mut COUNTER: usize = 0;
     let mut input = parse_macro_input!(item as ItemStruct);
     if input.fields.len() > 126 {
         return Error::MaxFieldsExceeds.emit().into();
@@ -1051,6 +1052,7 @@ pub fn changeset(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => unreachable!(),
     }
 
+    let index = unsafe { COUNTER };
     let impl_code = quote! {
         impl #name {
             #(
@@ -1077,9 +1079,17 @@ pub fn changeset(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn mask_mut(&mut self) -> &mut u128 {
                 &mut self.mask
             }
+
+            #[inline]
+            fn index() -> usize {
+                #index
+            }
         }
     };
 
+    unsafe {
+        COUNTER += 1;
+    }
     quote!(
         #input
         #impl_code

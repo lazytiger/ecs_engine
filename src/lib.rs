@@ -275,17 +275,41 @@ where
 pub trait Changeset {
     fn mask(&self) -> u128;
     fn mask_mut(&mut self) -> &mut u128;
+    fn index() -> usize;
+
+    #[inline]
     fn mask_new(&mut self) {
         *self.mask_mut() |= 0x80000000;
     }
+
+    #[inline]
     fn mask_del(&mut self) {
         *self.mask_mut() |= 0xc0000000;
     }
+
+    #[inline]
     fn is_new(&self) -> bool {
         self.mask() & 0x80000000 != 0
     }
+
+    #[inline]
     fn is_del(&self) -> bool {
         self.mask() & 0xc0000000 != 0
+    }
+
+    #[inline]
+    fn set_storage_dirty() {
+        MODS[Self::index()].store(true, Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn clear_storage_dirty() {
+        MODS[Self::index()].store(false, Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn is_storage_dirty() -> bool {
+        MODS[Self::index()].load(Ordering::Relaxed)
     }
 }
 

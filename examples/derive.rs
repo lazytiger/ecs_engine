@@ -1,8 +1,8 @@
 use codegen::{changeset, export, system};
 use ecs_engine::DynamicManager;
 use specs::{
-    world::Index, BitSet, Component, DispatcherBuilder, HashMapStorage, Join, LazyUpdate, World,
-    WorldExt,
+    world::Index, BitSet, Component, DispatcherBuilder, HashMapStorage, Join, LazyUpdate,
+    VecStorage, World, WorldExt,
 };
 
 #[derive(Clone, Default)]
@@ -106,6 +106,15 @@ fn user_derive_test(
 #[derive(Component)]
 #[storage(VecStorage)]
 pub struct MyTest {
+    pub name: String,
+    age: u8,
+    sex: u8,
+}
+
+#[changeset]
+#[derive(Component)]
+#[storage(VecStorage)]
+pub struct MyTest1 {
     pub name: String,
     age: u8,
     sex: u8,
