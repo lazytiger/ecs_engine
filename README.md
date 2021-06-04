@@ -454,10 +454,10 @@ system属性用于生成各种模板代码，主要功能如下：
 * System对象，包括动态链接支持以及状态字段
 * 实现setup代码，包括component的注册以及动态库初始化，最后把自己加入scheduler里
 * 实现System接口，具体包括
-    * 定义用于收集返回值以及清除input的数组
     * 循环整个定义的component，并调用实际处理函数
-    * 收集返回值以及当前的entity
-    * 插入新创建的component以及清除input组件
+    * 根据返回值插入新的component
+    * 清除这个input storage里的所有component
+    * 问题：如果某个input没被匹配到，则会直接被丢弃，如何处理？
 ### system属性补充  
 关于各种目标的示例在上面已经讲过了，下面再补充一些其他的未涉及到的属性
 * resource
