@@ -4,9 +4,10 @@ use mio::{
     Events, Interest, Poll, Registry, Token,
 };
 use slab::Slab;
-use specs::world::Index;
+use specs::{world::Index, RunNow, World};
 use std::{
     io::{ErrorKind, Read, Result, Write},
+    marker::PhantomData,
     net::{Shutdown, SocketAddr},
     sync::mpsc::{channel, Receiver, Sender},
     time::{Duration, Instant},
@@ -302,4 +303,34 @@ pub fn async_run(addr: SocketAddr) -> Sender<NetworkData> {
         }
     });
     r_sender
+}
+
+pub trait Input {
+    fn add_component(self, world: &World);
+    fn setup(world: &World);
+}
+
+pub struct InputSystem<T> {
+    receiver: Receiver<T>,
+}
+
+impl<T> InputSystem<T> {
+    pub fn new(receiver: Receiver<T>) -> InputSystem<T> {
+        Self { receiver }
+    }
+}
+
+impl<'a, T> RunNow<'a> for InputSystem<T>
+where
+    T: Input,
+{
+    fn run_now(&mut self, world: &'a World) {
+        self.receiver.try_iter().for_each(|t: T| {
+            t.add_component(world);
+        })
+    }
+
+    fn setup(&mut self, world: &mut World) {
+        T::setup(world);
+    }
 }

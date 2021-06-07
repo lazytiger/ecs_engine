@@ -18,7 +18,6 @@ use std::{
 };
 
 pub mod network;
-
 pub struct Library {
     name: String,
     lib: Option<libloading::Library>,
