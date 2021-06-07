@@ -375,6 +375,7 @@ impl Config {
         let mut input_storage = quote!();
         // names for storing input entities.
         let mut input_enames = Vec::new();
+        let mut write_components = Vec::new();
 
         for param in &self.signature.parameters {
             match param {
@@ -386,20 +387,18 @@ impl Config {
                     foreach_names.push(vname.clone());
                     if *mutable {
                         join_names.push(quote!(&mut #jname));
-                        fn_input_types.push(quote!(&mut #ty));
-                    } else {
-                        join_names.push(quote!(&#jname));
-                        fn_input_types.push(quote!(&#ty));
-                    }
-                    if *mutable || self.signature.is_return_type(&ty) {
                         let data = quote!(::specs::WriteStorage<'a, #ty>);
                         system_data_types.push(data);
                         input_names.push(quote!(mut #jname));
+                        fn_input_types.push(quote!(&mut #ty));
+                        write_components.push(ty);
                     } else {
+                        join_names.push(quote!(&#jname));
+                        fn_input_types.push(quote!(&#ty));
                         let data = quote!(::specs::ReadStorage<'a, #ty>);
                         system_data_types.push(data);
                         input_names.push(quote!(#jname));
-                    };
+                    }
                 }
                 Parameter::State(vname, index, mutable) => {
                     let ty = self.signature.state_args[*index].clone();
@@ -468,6 +467,7 @@ impl Config {
             join_names.push(quote!(!&#vname));
             foreach_names.push(format_ident!("_"));
             output_enames.push(format_ident!("e{}", vname));
+            write_components.push(typ.clone());
         }
 
         if (!self.signature.outputs.is_empty() || self.signature.input.is_some())
@@ -556,6 +556,7 @@ impl Config {
                 let run_code = quote! {
                     (#(#join_names,)*).join().for_each(|(#(#foreach_names,)*)| {
                         #(#input_enames.push(entity);)*
+                        looped = true;
                         #func_call
                     });
                     #(#output_enames.into_iter().for_each(|(entity, c)|{
@@ -587,7 +588,11 @@ impl Config {
                         fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
                             #(let mut #input_enames = Vec::new();)*
                             #(let mut #output_enames = Vec::new();)*
+                            let mut looped = false;
                             #run_code
+                            if looped {
+                                #(#write_components::set_storage_dirty();)*
+                            }
                         }
                     }
                 }

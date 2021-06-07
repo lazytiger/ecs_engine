@@ -354,64 +354,8 @@ impl<T> DynamicSystem<T> {
 ```
 
 ## 数据同步
-* Mutable是一个wrapper，它用于将所有的具体类进行封装，当需要一个mut引用时，Mutable会自动记录该类型T对应的Storage已经被修改，同时将当前对象
-  clone一份作为以后修改对比
-```rust
-pub struct Mutable<T, const N: usize> {
-    old: Option<T>,
-    curr: T,
-}
+* changeset属性用于自动生成带有一个mask的struct，同时自动生成各种属性的访问权限函数
 
-impl<T, const N: usize> Deref for Mutable<T, N> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.curr
-    }
-}
-
-impl<T, const N: usize> Mutable<T, N>
-where
-    T: Clone,
-    T: Default,
-{
-    pub fn get_mut(&mut self) -> &mut T {
-        if let None = self.old {
-            self.old.replace(self.curr.clone());
-        }
-        MODS[N].store(true, Ordering::Relaxed);
-        &mut self.curr
-    }
-
-    pub fn diff(&self) -> Vec<u8> {
-        todo!()
-    }
-}
-
-impl<T, const N: usize> Mutable<T, N> {
-    #[inline]
-    pub fn modified() -> bool {
-        MODS[N].load(Ordering::Relaxed)
-    }
-
-    #[inline]
-    pub fn reset() {
-        MODS[N].store(false, Ordering::Relaxed);
-    }
-}
-
-pub const MAX_COMPONENTS: usize = 1024;
-
-lazy_static::lazy_static! {
-    pub static ref MODS:Vec<AtomicBool> = {
-        let mut mods = Vec::with_capacity(MAX_COMPONENTS);
-        for i in 0..MAX_COMPONENTS {
-           mods.push(AtomicBool::new(false));
-        }
-        mods
-    };
-}
-```  
 * CommitChangeSystem是一个用于检查所有Component是否经过修改的模板System，我们在系统启动的时候自动加上这些检查
 ```rust
 pub struct CommitChangeSystem<T, const N: usize, const M: usize> {
@@ -454,10 +398,12 @@ system属性用于生成各种模板代码，主要功能如下：
 * System对象，包括动态链接支持以及状态字段
 * 实现setup代码，包括component的注册以及动态库初始化，最后把自己加入scheduler里
 * 实现System接口，具体包括
-    * 循环整个定义的component，并调用实际处理函数
-    * 根据返回值插入新的component
-    * 清除这个input storage里的所有component
-    * 问题：如果某个input没被匹配到，则会直接被丢弃，如何处理？
+    * 定义用于收集已经处理过的entity的vector，如果有input的话
+    * 定义于用收集output结果的vector，如果有output的话
+    * 循环整个定义的component，并调用实际处理函数，如果有output的话，匹配时取反
+    * 根据返回值收集新的component
+    * 清除这个input storage里已经处理过的component，然后再查看是否还有未匹配的input，如果有则打日志报错
+    * 插入收集到的所有新的component并插入
 ### system属性补充  
 关于各种目标的示例在上面已经讲过了，下面再补充一些其他的未涉及到的属性
 * resource

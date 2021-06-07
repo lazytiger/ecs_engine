@@ -1,32 +1,38 @@
+#![feature(macro_attributes_in_derive_output)]
 use codegen::{changeset, export, system};
-use ecs_engine::DynamicManager;
+use ecs_engine::{Changeset, DynamicManager};
 use specs::{
     world::Index, BitSet, Component, DenseVecStorage, DispatcherBuilder, HashMapStorage, Join,
     LazyUpdate, VecStorage, World, WorldExt,
 };
 
+#[changeset]
 #[derive(Clone, Default, Component)]
 pub struct UserInfo {
     pub name: String,
     pub guild_id: Index,
 }
 
+#[changeset]
 #[derive(Clone, Default, Component)]
 pub struct GuildInfo {
     users: BitSet,
     pub name: String,
 }
 
+#[changeset]
 #[derive(Clone, Default, Component)]
 pub struct BagInfo {
     pub items: Vec<String>,
 }
 
+#[changeset]
 #[derive(Clone, Default, Component)]
 pub struct GuildMember {
     pub role: u8,
 }
 
+#[changeset]
 #[derive(Component)]
 #[storage(HashMapStorage)]
 pub struct UserInput {
