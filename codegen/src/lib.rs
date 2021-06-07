@@ -325,6 +325,7 @@ impl Config {
                 self.signature.ident.to_string().to_case(Case::UpperCamel)
             )
         };
+        let system_name_str = system_name.to_string();
         let system_fn = format_ident!("{}Fn", system_name);
 
         let lib_name = if let Some(lib_name) = &self.lib_name {
@@ -361,6 +362,8 @@ impl Config {
         let mut output_vnames = Vec::new();
         // storage names for output types
         let mut output_snames = Vec::new();
+        // vectors for storing output entities.
+        let mut output_enames = Vec::new();
         // names for all input parameters
         let mut input_names = Vec::new();
         // names for all function input parameters
@@ -370,6 +373,8 @@ impl Config {
         // names for foreach
         let mut foreach_names = Vec::new();
         let mut input_storage = quote!();
+        // names for storing input entities.
+        let mut input_enames = Vec::new();
 
         for param in &self.signature.parameters {
             match param {
@@ -436,7 +441,8 @@ impl Config {
                         foreach_names.push(vname.clone());
                         input_names.push(quote!(mut #jname));
                         input_storage = quote!(#jname);
-                        system_data_types.push(quote!(::specs::WriteStorage<'a, #ty>))
+                        system_data_types.push(quote!(::specs::WriteStorage<'a, #ty>));
+                        input_enames.push(format_ident!("es"));
                     }
                 }
                 Parameter::Entity(vname) => {
@@ -459,6 +465,9 @@ impl Config {
             fn_output_types.push(quote!(Option<#typ>));
             output_vnames.push(format_ident!("r{}", i));
             component_types.push(typ.clone());
+            join_names.push(quote!(!&#vname));
+            foreach_names.push(format_ident!("_"));
+            output_enames.push(format_ident!("e{}", vname));
         }
 
         if (!self.signature.outputs.is_empty() || self.signature.input.is_some())
@@ -474,9 +483,7 @@ impl Config {
 
         let output_code = quote! {
            #(if let Some(#output_vnames) = #output_vnames{
-                if let Err(err) = #output_snames.insert(entity, #output_vnames) {
-                    log::error!("insert component failed {}", err);
-                }
+                #output_enames.push((entity, #output_vnames));
             })*
         };
 
@@ -508,8 +515,12 @@ impl Config {
 
         let purge_code = if self.signature.input.is_some() {
             quote! {
+                es.iter().for_each(|e| {
+                    #input_storage.remove(*e);
+                });
                 let es: Vec<_> = (&jentity, &#input_storage).join().map(|(e, _)|e).collect();
                 es.iter().for_each(|e|{
+                    log::error!("entity {:?} has unmatched input in system {}", e, #system_name_str);
                     #input_storage.remove(*e);
                 });
             }
@@ -544,8 +555,14 @@ impl Config {
             SystemType::Single => {
                 let run_code = quote! {
                     (#(#join_names,)*).join().for_each(|(#(#foreach_names,)*)| {
+                        #(#input_enames.push(entity);)*
                         #func_call
                     });
+                    #(#output_enames.into_iter().for_each(|(entity, c)|{
+                        if let Err(err) = #output_snames.insert(entity, c) {
+                            log::error!("insert component failed:{}", err);
+                        }
+                    });)*
                     #purge_code
                 };
                 let run_code = if self.dynamic {
@@ -568,7 +585,9 @@ impl Config {
                         );
 
                         fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
-                           #run_code
+                            #(let mut #input_enames = Vec::new();)*
+                            #(let mut #output_enames = Vec::new();)*
+                            #run_code
                         }
                     }
                 }
