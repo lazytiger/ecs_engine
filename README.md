@@ -404,6 +404,7 @@ system属性用于生成各种模板代码，主要功能如下：
     * 根据返回值收集新的component
     * 清除这个input storage里已经处理过的component，然后再查看是否还有未匹配的input，如果有则打日志报错
     * 插入收集到的所有新的component并插入
+    * 如果WriteComponent确实被触发，则设置这个Component为dirty，如果确认一个类是否是changeset?
 ### system属性补充  
 关于各种目标的示例在上面已经讲过了，下面再补充一些其他的未涉及到的属性
 * resource
