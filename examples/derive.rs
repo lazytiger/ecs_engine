@@ -1,7 +1,6 @@
 #![feature(macro_attributes_in_derive_output)]
 #![deny(unsafe_code)]
-use codegen::{changeset, export, system};
-use ecs_engine::{Changeset, DynamicManager};
+use ecs_engine::{changeset, export, system, Changeset, DynamicManager};
 use specs::{
     world::Index, BitSet, Component, DenseVecStorage, DispatcherBuilder, HashMapStorage, Join,
     LazyUpdate, VecStorage, World, WorldExt,
