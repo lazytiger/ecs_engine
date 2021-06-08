@@ -15,8 +15,10 @@ use specs::{world::Index, BitSet, Component, Join, System, VecStorage, WriteStor
 use std::{
     io::{Read, Write},
     marker::PhantomData,
+    ops::DerefMut,
 };
 
+pub mod config;
 pub mod network;
 pub struct Library {
     name: String,
@@ -262,17 +264,74 @@ pub trait Changeset {
     }
 }
 
-pub trait SerDe {
-    fn ser<W: Write>(&self, w: &mut Write);
-    fn de<R: Read>(&mut self, r: &R);
+struct ComponentWrapper<T> {
+    data: T,
+    mask_db: u64,
+    mask_ct: u64,
 }
 
-impl SerDe for &u8 {
-    fn ser<W: Write>(&self, w: &mut dyn Write) {
-        todo!()
+impl<T> Deref for ComponentWrapper<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl<T> DerefMut for ComponentWrapper<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
+
+impl<T> ComponentWrapper<T>
+where
+    T: protobuf::Mask,
+    T: protobuf::Message,
+{
+    pub fn new(data: T) -> Self {
+        Self {
+            data,
+            mask_ct: 0,
+            mask_db: 0,
+        }
     }
 
-    fn de<R: Read>(&mut self, r: &R) {
-        todo!()
+    fn commit(&mut self) {
+        self.mask_db |= self.mask();
+        self.mask_ct |= self.mask();
+    }
+
+    pub fn encode_db(&mut self) -> Vec<u8> {
+        self.commit();
+        let data = self.encode(self.mask_db);
+        self.mask_db = 0;
+        data
+    }
+
+    fn encode(&mut self, mask: u64) -> Vec<u8> {
+        *self.data.mask_mut() = mask;
+        let data = match self.data.write_to_bytes() {
+            Err(err) => {
+                log::error!("encode failed {}", err);
+                Vec::new()
+            }
+            Ok(data) => data,
+        };
+        self.data.clear_mask();
+        data
+    }
+
+    pub fn encode_ct(&mut self) -> Vec<u8> {
+        self.commit();
+        let data = self.encode(self.mask_ct);
+        self.mask_ct = 0;
+        data
+    }
+
+    pub fn decode(&mut self, data: &[u8]) {
+        if let Err(err) = self.data.merge_from_bytes(data) {
+            log::error!("decode failed:{}", err);
+        }
     }
 }

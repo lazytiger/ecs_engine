@@ -1,4 +1,5 @@
 #![feature(macro_attributes_in_derive_output)]
+#![deny(unsafe_code)]
 use codegen::{changeset, export, system};
 use ecs_engine::{Changeset, DynamicManager};
 use specs::{

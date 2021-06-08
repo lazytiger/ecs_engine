@@ -17,6 +17,10 @@ chrono = "0.4"
 mio = { version = "0.7", features = ["net", "os-poll"] }
 slab = "0.4"
 rayon = "1.5"
+protobuf = {path = "../protobuf/protobuf"}
+serde = "1.0"
+serde_derive = "1.0"
+toml = "0.5"
 
 [workspace]
 members = ["codegen"]
