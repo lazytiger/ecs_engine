@@ -361,6 +361,126 @@ impl<T> DynamicSystem<T> {
 
 ## 数据同步
 * changeset属性用于自动生成带有一个mask的struct，同时自动生成各种属性的访问权限函数
+* 修改protobuf的规则，如果一个字段名为mask并且类型为u64，那么就认为这是一个特殊的mask字段，这个字段用于标记当前struct里有哪些字段被修改过
+    * 修改所有的set/mut/take/clear方法，标脏，如下
+    ```rust
+    pub fn clear_names(&mut self) {
+        self.set_dirty_field(2);
+        self.names.clear();
+    }
+
+    // Param is passed by value, moved
+    pub fn set_names(&mut self, v: ::std::vec::Vec<u32>) {
+        self.set_dirty_field(2);
+        self.names = v;
+    }
+
+    // Mutable pointer to the field.
+    pub fn mut_names(&mut self) -> &mut ::std::vec::Vec<u32> {
+        self.set_dirty_field(2);
+        &mut self.names
+    }
+
+    // Take field
+    pub fn take_names(&mut self) -> ::std::vec::Vec<u32> {
+        self.set_dirty_field(2);
+        ::std::mem::replace(&mut self.names, ::std::vec::Vec::new())
+    }
+    ```
+    * 修改merge_from方法，最后处理一下mask里标记了，但是并未在编码数据中出现的字段，这些字段应该变成默认值，如下
+    ```rust
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        let mut mask = 0u64;
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_int32()?;
+                    self.count = tmp;
+                    mask |= (1 << 1);
+                },
+                2 => {
+                    ::protobuf::rt::read_repeated_uint32_into(wire_type, is, &mut self.names)?;
+                    mask |= (1 << 2);
+                },
+                3 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint64()?;
+                    self.mask = tmp;
+                    mask |= (1 << 3);
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        self.mask &= ! mask;
+        while self.mask != 0 {
+            let field_number = mask.trailing_zeros();
+            match field_number {
+                1 => {
+                    self.clear_count();
+                    self.clear_dirty_field(1);
+                },
+                2 => {
+                    self.clear_names();
+                    self.clear_dirty_field(2);
+                },
+                _ => {
+                    return Err(::protobuf::ProtobufError::WireError(::protobuf::error::WireError::Other));
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+    ```
+    * 修改compute_size以及write_to_with_cached_sizes方法，只有当某个字段标脏时才会被编码，如下
+    ```rust
+    fn compute_size(&self) -> u32 {
+        let mut my_size = 0;
+        if self.is_dirty_field(1) {
+            if self.count != 0 {
+                my_size += ::protobuf::rt::value_size(1, self.count, ::protobuf::wire_format::WireTypeVarint);
+            }
+        }
+        if self.is_dirty_field(2) {
+            for value in &self.names {
+                my_size += ::protobuf::rt::value_size(2, *value, ::protobuf::wire_format::WireTypeVarint);
+            };
+        }
+        if self.mask != 0 {
+            my_size += ::protobuf::rt::value_size(3, self.mask, ::protobuf::wire_format::WireTypeVarint);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.get_unknown_fields());
+        self.cached_size.set(my_size);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        if self.is_dirty_field(1) {
+            if self.count != 0 {
+                os.write_int32(1, self.count)?;
+            }
+        }
+        if self.is_dirty_field(2) {
+            for v in &self.names {
+                os.write_uint32(2, *v)?;
+            };
+        }
+        if self.mask != 0 {
+            os.write_uint64(3, self.mask)?;
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+    ```
+    * 还有一种思路是直接向下兼容的方案，也就是说decode不变，encode的时候，不管当前字段是否为空，只要mask标脏就编码，但是这个方案对于proto3不
+    适用，因为proto3中，如果数组为空，直接就不编码，这一点没其他方式可以绕过去
 
 * CommitChangeSystem是一个用于检查所有Component是否经过修改的模板System，我们在系统启动的时候自动加上这些检查
 ```rust
