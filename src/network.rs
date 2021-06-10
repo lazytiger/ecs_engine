@@ -4,7 +4,7 @@ use mio::{
     Events, Interest, Poll, Registry, Token,
 };
 use slab::Slab;
-use specs::{world::Index, RunNow, World};
+use specs::{world::Index, Entity, RunNow, World};
 use std::{
     io::{ErrorKind, Read, Result, Write},
     marker::PhantomData,
@@ -173,13 +173,14 @@ impl<T: Fn(&[u8]) -> usize, const N: usize> Connection<T, N> {
     }
 }
 
-pub type NetworkData = (usize, Vec<u8>);
+pub type NetworkInputData = (Option<Entity>, Vec<u8>);
+pub type NetworkOutputData = (usize, Vec<u8>);
 
 struct Listener<T: Fn(&[u8]) -> usize + Clone, const N: usize> {
     listener: TcpListener,
     conns: Slab<Connection<T, N>>,
-    sender: Sender<NetworkData>,
-    receiver: Option<Receiver<NetworkData>>,
+    sender: Sender<NetworkInputData>,
+    receiver: Option<Receiver<NetworkOutputData>>,
     decoder: T,
 }
 
@@ -187,8 +188,8 @@ impl<T: Fn(&[u8]) -> usize + Clone, const N: usize> Listener<T, N> {
     pub fn new(
         listener: TcpListener,
         capacity: usize,
-        sender: Sender<NetworkData>,
-        receiver: Receiver<NetworkData>,
+        sender: Sender<NetworkInputData>,
+        receiver: Receiver<NetworkOutputData>,
         decoder: T,
     ) -> Self {
         Self {
@@ -265,12 +266,12 @@ impl<T: Fn(&[u8]) -> usize + Clone, const N: usize> Listener<T, N> {
 const LISTENER: Token = Token(1);
 const ECS_SENDER: Token = Token(2);
 
-pub fn run(
-    addr: SocketAddr,
-    sender: Sender<NetworkData>,
-    receiver: Receiver<NetworkData>,
+pub fn run_network(
+    address: SocketAddr,
+    sender: Sender<NetworkInputData>,
+    receiver: Receiver<NetworkOutputData>,
 ) -> Result<()> {
-    let listener = TcpListener::bind(addr)?;
+    let listener = TcpListener::bind(address)?;
     let mut listener = Listener::<_, 8>::new(listener, 4096, sender, receiver, |data| 0);
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(1024);
@@ -294,28 +295,60 @@ pub fn run(
     }
 }
 
-pub fn async_run(addr: SocketAddr) -> Sender<NetworkData> {
-    let (sender, receiver) = channel();
-    let r_sender = sender.clone();
+pub fn async_run<T>(addr: SocketAddr) -> (Receiver<(Option<Entity>, T)>, Sender<NetworkOutputData>)
+where
+    T: Send,
+    T: 'static,
+    T: Input,
+{
+    // network send data to decode, one-to-one
+    let (network_sender, network_receiver) = channel::<NetworkInputData>();
+    // decode send data to ecs, one-to-one
+    let (request_sender, request_receiver) = channel::<(Option<Entity>, T)>();
+    // ecs send data to network many-to-one
+    let (response_sender, response_receiver) = channel::<NetworkOutputData>();
     rayon::spawn(move || {
-        if let Err(err) = run(addr, sender, receiver) {
+        if let Err(err) = run_network(addr, network_sender, response_receiver) {
             log::error!("network thread quit with error:{}", err);
         }
     });
-    r_sender
+    rayon::spawn(move || {
+        run_decode(request_sender, network_receiver);
+    });
+    (request_receiver, response_sender)
 }
 
+fn run_decode<T>(sender: Sender<(Option<Entity>, T)>, receiver: Receiver<NetworkInputData>)
+where
+    T: Input,
+{
+    receiver.iter().for_each(|(entity, data)| {
+        let data = T::decode(data);
+        if let Err(err) = sender.send((entity, data)) {
+            log::error!("send data to ecs failed {}", err);
+        }
+    })
+}
+
+/// Trait for requests enum type, it's an aggregation of all requests
 pub trait Input {
-    fn add_component(self, world: &World);
+    /// Match the actual type contains in enum, and add it to world.
+    /// If entity is none and current type is Login, a new entity will be created.
+    fn add_component(self, entity: Option<Entity>, world: &World);
+
+    /// Register all the actual types as components
     fn setup(world: &World);
+
+    /// Decode actual type as header specified.
+    fn decode(data: Vec<u8>) -> Self;
 }
 
 pub struct InputSystem<T> {
-    receiver: Receiver<T>,
+    receiver: Receiver<(Option<Entity>, T)>,
 }
 
 impl<T> InputSystem<T> {
-    pub fn new(receiver: Receiver<T>) -> InputSystem<T> {
+    pub fn new(receiver: Receiver<(Option<Entity>, T)>) -> InputSystem<T> {
         Self { receiver }
     }
 }
@@ -325,8 +358,8 @@ where
     T: Input,
 {
     fn run_now(&mut self, world: &'a World) {
-        self.receiver.try_iter().for_each(|t: T| {
-            t.add_component(world);
+        self.receiver.try_iter().for_each(|(entity, data)| {
+            data.add_component(entity, world);
         })
     }
 

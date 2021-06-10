@@ -1,0 +1,18 @@
+name = "UserLogin"
+
+type = "Component"
+
+[component]
+flagged = false
+type = "Vec"
+mask = false
+
+[[fields]]
+name = "user_name"
+type = "String"
+field = 1
+
+[[fields]]
+name = "passworld"
+type = "String"
+field = 2
