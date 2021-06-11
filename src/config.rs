@@ -289,8 +289,7 @@ impl Generator {
                     #(world.register::<#names>();)*
                 }
 
-                fn decode(buffer:&[u8]) ->Self {
-                    let cmd = 0;
+                fn decode(cmd:u32, buffer:&[u8]) ->Self {
                     match cmd {
                     #(
                             #cmds => {

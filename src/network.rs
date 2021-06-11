@@ -323,7 +323,8 @@ where
     T: Input,
 {
     receiver.iter().for_each(|(entity, data)| {
-        let data = T::decode(data.as_slice());
+        //TODO
+        let data = T::decode(0, data.as_slice());
         if let Err(err) = sender.send((entity, data)) {
             log::error!("send data to ecs failed {}", err);
         }
@@ -344,7 +345,7 @@ pub trait Input {
     fn setup(world: &mut World);
 
     /// Decode actual type as header specified.
-    fn decode(data: &[u8]) -> Self;
+    fn decode(cmd: u32, data: &[u8]) -> Self;
 }
 
 pub struct InputSystem<T> {
