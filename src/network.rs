@@ -334,10 +334,14 @@ where
 pub trait Input {
     /// Match the actual type contains in enum, and add it to world.
     /// If entity is none and current type is Login, a new entity will be created.
-    fn add_component(self, entity: Option<Entity>, world: &World);
+    fn add_component(
+        self,
+        entity: Option<Entity>,
+        world: &World,
+    ) -> std::result::Result<(), specs::error::Error>;
 
     /// Register all the actual types as components
-    fn setup(world: &World);
+    fn setup(world: &mut World);
 
     /// Decode actual type as header specified.
     fn decode(data: Vec<u8>) -> Self;

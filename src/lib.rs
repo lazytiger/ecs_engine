@@ -337,3 +337,16 @@ where
         }
     }
 }
+
+/// 只读封装，如果某个变量从根本上不希望进行修改，则可以使用此模板类型
+pub struct Readonly<T> {
+    data: T,
+}
+
+impl<T> Deref for Readonly<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}

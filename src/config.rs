@@ -1,9 +1,13 @@
+use derive_more::From;
+use protobuf_codegen_pure::{Codegen, Customize};
+use quote::{format_ident, quote};
 use serde_derive::Deserialize;
 use std::{
     collections::HashMap,
-    fs::File,
+    fs::{read_dir, File, OpenOptions},
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
+    process::Command,
 };
 
 #[derive(Deserialize, Debug)]
@@ -12,6 +16,7 @@ pub enum StorageType {
     DefaultVec,
     DenseVec,
     HashMap,
+    Null,
 }
 
 #[derive(Deserialize, Debug)]
@@ -19,6 +24,35 @@ pub enum ConfigType {
     Request,
     Response,
     Component,
+}
+
+#[derive(Deserialize, Debug)]
+pub enum DataType {
+    String,
+    U32,
+    U64,
+    I32,
+    I64,
+    F32,
+    F64,
+    Bool,
+    Bytes,
+}
+
+impl DataType {
+    fn to_rust_type(&self) -> &str {
+        match self {
+            DataType::String => "string",
+            DataType::U32 => "uint32",
+            DataType::U64 => "uint64",
+            DataType::I32 => "sint32",
+            DataType::I64 => "sint64",
+            DataType::F32 => "float",
+            DataType::F64 => "double",
+            DataType::Bool => "bool",
+            DataType::Bytes => "bytes",
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -31,7 +65,7 @@ pub struct Component {
 #[derive(Deserialize, Debug)]
 pub struct Field {
     pub name: String,
-    pub r#type: String,
+    pub r#type: DataType,
     pub field: u32,
     pub repeated: Option<bool>,
 }
@@ -54,53 +88,197 @@ impl Config {
     }
 }
 
+#[derive(Default)]
 pub struct Generator {
-    inputs: Vec<String>,
-    output: String,
+    /// 用于存储配置信息，其内含有requests, responses, components三个目录
+    config_dir: PathBuf,
+    /// 用于存储生成的.proto文件，其内含有requests, responses, components三个目录
+    proto_dir: PathBuf,
+    /// 用于存储生成的request pb文件
+    request_dir: PathBuf,
+    /// 用于存储生成的response pb文件
+    response_dir: PathBuf,
+    /// 用于存储生成的component pb文件
+    component_dir: PathBuf,
 }
 
-#[derive(Debug)]
+#[derive(Debug, From)]
 pub enum Error {
     Io(std::io::Error),
     De(toml::de::Error),
 }
 
-impl Generator {
-    pub fn gen(&self) -> Result<(), Error> {
-        let results: Vec<_> = self
-            .inputs
-            .iter()
-            .map(|f| -> Result<(String, Config), Error> {
-                let mut file = File::open(f).map_err(|err| Error::Io(err))?;
-                let mut data = String::new();
-                file.read_to_string(&mut data)
-                    .map_err(|err| Error::Io(err))?;
-                let table: Config = toml::from_str(data.as_str()).map_err(|err| Error::De(err))?;
-                Ok((f.clone(), table))
-            })
-            .filter(|ret| {
-                if let Err(err) = ret {
-                    log::error!("decode failed:{:?}", err);
-                }
-                ret.is_ok()
-            })
-            .map(|ret| ret.unwrap())
-            .collect();
-        for (k, v) in results {
-            let mut name = k.split('.').next().unwrap().to_owned();
-            name.push_str(".proto");
-            let mut path = PathBuf::new();
-            path.push(&self.output);
-            path.push(name);
-            let mut file = File::create(path).map_err(|err| Error::Io(err))?;
-            self.gen_proto(&mut file, &v)
-                .map_err(|err| Error::Io(err))?;
+fn read_files(input_dir: PathBuf) -> std::io::Result<Vec<PathBuf>> {
+    let mut inputs = Vec::new();
+    for f in read_dir(input_dir)? {
+        let f = f?;
+        if f.file_type()?.is_file() {
+            inputs.push(f.path());
         }
+    }
+    Ok(inputs)
+}
 
+impl Generator {
+    pub fn config_dir(&mut self, config_dir: impl AsRef<Path>) -> &mut Self {
+        self.config_dir = config_dir.as_ref().to_owned();
+        self
+    }
+
+    pub fn proto_dir(&mut self, proto_dir: impl AsRef<Path>) -> &mut Self {
+        self.proto_dir = proto_dir.as_ref().to_owned();
+        self
+    }
+
+    pub fn request_dir(&mut self, request_dir: impl AsRef<Path>) -> &mut Self {
+        self.request_dir = request_dir.as_ref().to_owned();
+        self
+    }
+
+    pub fn response_dir(&mut self, response_dir: impl AsRef<Path>) -> &mut Self {
+        self.response_dir = response_dir.as_ref().to_owned();
+        self
+    }
+
+    pub fn component_dir(&mut self, component_dir: impl AsRef<Path>) -> &mut Self {
+        self.component_dir = component_dir.as_ref().to_owned();
+        self
+    }
+
+    fn parse_config(config_dir: PathBuf) -> Result<Vec<(PathBuf, Config)>, Error> {
+        let files = read_files(config_dir).map_err(Error::from)?;
+        let mut configs = Vec::new();
+        for input in files {
+            let mut file = File::open(&input).map_err(Error::from)?;
+            let mut data = String::new();
+            file.read_to_string(&mut data).map_err(Error::from)?;
+            let config: Config = toml::from_str(data.as_str()).map_err(Error::from)?;
+            configs.push((input.clone(), config));
+        }
+        Ok(configs)
+    }
+
+    pub fn run(&mut self) -> Result<(), Error> {
+        let empty_path = PathBuf::new();
+        if self.request_dir == empty_path {
+            self.request_dir = "src/requests".into();
+        }
+        if self.component_dir == empty_path {
+            self.component_dir = "src/components".into();
+        }
+        if self.response_dir == empty_path {
+            self.response_dir = "src/responses".into();
+        }
+        self.gen_request()?;
+        self.gen_response()?;
+        self.gen_component()?;
         Ok(())
     }
 
-    fn gen_proto(&self, file: &mut File, v: &Config) -> std::io::Result<()> {
+    fn gen_response(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn gen_component(&self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn gen_protos(input_dir: PathBuf, output_dir: PathBuf) -> std::io::Result<()> {
+        let files = read_files(input_dir.clone())?;
+        let mut customize = Customize::default();
+        customize.gen_mod_rs = Some(true);
+        customize.generate_accessors = Some(true);
+        customize.expose_fields = Some(false);
+        let mut codegen = Codegen::new();
+        codegen
+            .customize(customize)
+            .inputs(files.iter())
+            .include(input_dir)
+            .out_dir(output_dir)
+            .run()
+    }
+
+    fn gen_messages(configs: &Vec<(PathBuf, Config)>, output_dir: PathBuf) -> Result<(), Error> {
+        for (k, v) in configs {
+            let mut name = k.file_stem().unwrap().to_owned();
+            name.push(".proto");
+            let mut path = output_dir.clone();
+            path.push(name);
+            let mut file = File::create(path).map_err(Error::from)?;
+            Self::gen_message(&mut file, &v).map_err(Error::from)?;
+        }
+        Ok(())
+    }
+
+    fn gen_request(&self) -> Result<(), Error> {
+        let mut config_dir = self.config_dir.clone();
+        config_dir.push("requests");
+
+        let mut proto_dir = self.proto_dir.clone();
+        proto_dir.push("requests");
+
+        let configs = Self::parse_config(config_dir)?;
+
+        Self::gen_messages(&configs, proto_dir.clone());
+        Self::gen_protos(proto_dir, self.request_dir.clone());
+
+        let (files, names): (Vec<_>, Vec<_>) = configs
+            .iter()
+            .map(|(f, c)| {
+                (
+                    format_ident!("{}", f.file_stem().unwrap().to_str().unwrap()),
+                    format_ident!("{}", c.name),
+                )
+            })
+            .unzip();
+
+        let data = quote!(
+            #(use #files::#names;)*
+            use ecs_engine::network::Input;
+            use specs::World;
+            use specs::Entity;
+            use specs::WorldExt;
+            use specs::error::Error;
+
+            pub enum Request {
+                #(#names(#names),)*
+            }
+
+            impl Input for Request {
+                fn add_component(self, entity:Option<Entity>, world:&World) ->Result<(), Error> {
+                    match self {
+                        #(Request::#names(c) => world.write_component::<#names>().insert(entity.unwrap(), c).map(|_|()),)*
+                    }
+                }
+
+                fn setup(world:&mut World) {
+                    #(world.register::<#names>();)*
+                }
+
+                fn decode(data:Vec<u8>) ->Self {
+
+                }
+            }
+        )
+        .to_string();
+
+        let mut name = self.request_dir.clone();
+        name.push("mod.rs");
+        let mut file = OpenOptions::new().append(true).open(&name)?;
+        file.write_all(data.as_bytes())?;
+        drop(file);
+
+        Self::format_file(name)?;
+        Ok(())
+    }
+
+    fn format_file(file: PathBuf) -> std::io::Result<()> {
+        Command::new("rustfmt").arg(file).output()?;
+        Ok(())
+    }
+
+    /// 根据Config类型生成一个Protobuf配置文件
+    fn gen_message(file: &mut File, v: &Config) -> std::io::Result<()> {
         writeln!(file, r#"syntax = "proto3";"#)?;
         writeln!(file, "message {} {{", v.name)?;
         for c in &v.fields {
@@ -112,7 +290,7 @@ impl Generator {
                 } else {
                     ""
                 },
-                c.r#type,
+                c.r#type.to_rust_type(),
                 c.name,
                 c.field
             )?;
