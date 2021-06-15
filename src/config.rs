@@ -352,7 +352,9 @@ impl Generator {
         writeln!(file, r#"syntax = "proto3";"#)?;
         for v in &cf.configs {
             writeln!(file, "message {} {{", v.name)?;
-            for (name, c) in &v.fields {
+            let mut fields: Vec<_> = v.fields.iter().collect();
+            fields.sort_by(|(_, f1), (_, f2)| f1.field.cmp(&f2.field));
+            for (name, c) in fields {
                 writeln!(
                     file,
                     "\t{}{} {} = {};",
