@@ -115,6 +115,7 @@ pub struct Generator {
 pub enum Error {
     Io(std::io::Error),
     De(toml::de::Error),
+    DuplicateFieldNumber(String),
 }
 
 fn read_files(input_dir: PathBuf) -> std::io::Result<Vec<PathBuf>> {
@@ -161,8 +162,20 @@ impl Generator {
             let mut file = File::open(&input).map_err(Error::from)?;
             let mut data = String::new();
             file.read_to_string(&mut data).map_err(Error::from)?;
-            let config: ConfigFile = toml::from_str(data.as_str()).map_err(Error::from)?;
-            configs.push((input.clone(), config));
+            let cf: ConfigFile = toml::from_str(data.as_str()).map_err(Error::from)?;
+            if let Some(config) = cf.configs.iter().find(|config| {
+                let mut fields: Vec<_> = config.fields.iter().map(|(_, f)| f.field).collect();
+                let count = fields.len();
+                fields.sort();
+                fields.dedup();
+                count != fields.len()
+            }) {
+                return Err(Error::DuplicateFieldNumber(format!(
+                    "{:?} - {}",
+                    input, config.name
+                )));
+            }
+            configs.push((input.clone(), cf));
         }
         Ok(configs)
     }
