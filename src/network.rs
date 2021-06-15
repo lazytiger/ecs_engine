@@ -1,10 +1,3 @@
-use mio::{
-    event::Event,
-    net::{TcpListener, TcpStream},
-    Events, Interest, Poll, Registry, Token,
-};
-use slab::Slab;
-use specs::{world::Index, Entity, LazyUpdate, RunNow, World, WorldExt};
 use std::{
     io::{ErrorKind, Read, Result, Write},
     marker::PhantomData,
@@ -12,6 +5,57 @@ use std::{
     sync::mpsc::{channel, Receiver, Sender},
     time::{Duration, Instant},
 };
+
+use crate::config::ConfigType::Request;
+use mio::{
+    event::Event,
+    net::{TcpListener, TcpStream},
+    Events, Interest, Poll, Registry, Token,
+};
+use slab::Slab;
+use specs::{world::Index, Entity, LazyUpdate, RunNow, World, WorldExt};
+
+#[derive(Clone)]
+pub enum RequestIdent {
+    Entity(Entity),
+    Token(Token),
+}
+
+impl RequestIdent {
+    pub fn token(self) -> Token {
+        match self {
+            RequestIdent::Entity(_) => panic!("entity stored instead of token"),
+            RequestIdent::Token(token) => token,
+        }
+    }
+
+    pub fn entity(self) -> Entity {
+        match self {
+            RequestIdent::Entity(entity) => entity,
+            RequestIdent::Token(_) => panic!("token stored instead of entity"),
+        }
+    }
+
+    pub fn replace_entity(&mut self, entity: Entity) {
+        *self = RequestIdent::Entity(entity);
+    }
+
+    pub fn replace_token(&mut self, token: Token) {
+        *self = RequestIdent::Token(token);
+    }
+
+    pub fn is_entity(&self) -> bool {
+        if let RequestIdent::Entity(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_token(&self) -> bool {
+        !self.is_entity()
+    }
+}
 
 #[derive(Default, Clone)]
 pub struct Header {
@@ -28,7 +72,6 @@ where
     tag: String,
     token: Token,
     interests: Interest,
-    index: Index,
     read_bytes: Vec<u8>,
     write_bytes: Vec<u8>,
     last_time: Instant,
@@ -36,7 +79,7 @@ where
     decoder: T,
     header: Header,
     sender: Sender<NetworkInputData>,
-    entity: Option<Entity>,
+    ident: RequestIdent,
 }
 
 impl<T, const N: usize> Connection<T, N>
@@ -55,7 +98,6 @@ where
             tag,
             token: Token(0),
             interests: Interest::READABLE,
-            index: 0,
             read_bytes: Vec::with_capacity(1024),
             write_bytes: Vec::with_capacity(1024),
             last_time: Instant::now(),
@@ -63,7 +105,7 @@ where
             decoder,
             header: Header::default(),
             sender,
-            entity: None,
+            ident: RequestIdent::Token(Token(0)),
         }
     }
 
@@ -159,7 +201,10 @@ where
 
         while self.header.length > 0 && read_bytes.len() >= self.header.length {
             let body: Vec<_> = read_bytes[..self.header.length].into();
-            if let Err(err) = self.sender.send((self.entity, self.header.clone(), body)) {
+            if let Err(err) = self
+                .sender
+                .send((self.ident.clone(), self.header.clone(), body))
+            {
                 log::error!("send data to ecs failed:{}", err);
                 //todo close
             }
@@ -195,9 +240,15 @@ where
     fn closed(&self) -> bool {
         todo!()
     }
+
+    fn set_token(&mut self, token: Token) {
+        self.token = token;
+        self.ident.replace_token(token);
+    }
 }
 
-pub type NetworkInputData = (Option<Entity>, Header, Vec<u8>);
+pub type NetworkInputData = (RequestIdent, Header, Vec<u8>);
+pub type RequestData<T> = (RequestIdent, T);
 pub type NetworkOutputData = (usize, Vec<u8>);
 
 struct Listener<T, const N: usize>
@@ -336,7 +387,7 @@ where
 pub fn async_run<T, D, const N: usize>(
     addr: SocketAddr,
     decoder: D,
-) -> (Receiver<(Option<Entity>, T)>, Sender<NetworkOutputData>)
+) -> (Receiver<RequestData<T>>, Sender<NetworkOutputData>)
 where
     T: Send + Input + 'static,
     D: Fn([u8; N]) -> Header,
@@ -345,7 +396,7 @@ where
     // network send data to decode, one-to-one
     let (network_sender, network_receiver) = channel::<NetworkInputData>();
     // decode send data to ecs, one-to-one
-    let (request_sender, request_receiver) = channel::<(Option<Entity>, T)>();
+    let (request_sender, request_receiver) = channel::<RequestData<T>>();
     // ecs send data to network many-to-one
     let (response_sender, response_receiver) = channel::<NetworkOutputData>();
     rayon::spawn(move || {
@@ -359,13 +410,13 @@ where
     (request_receiver, response_sender)
 }
 
-fn run_decode<T>(sender: Sender<(Option<Entity>, T)>, receiver: Receiver<NetworkInputData>)
+fn run_decode<T>(sender: Sender<RequestData<T>>, receiver: Receiver<NetworkInputData>)
 where
     T: Input,
 {
-    receiver.iter().for_each(|(entity, header, data)| {
+    receiver.iter().for_each(|(ident, header, data)| {
         let data = T::decode(header.cmd, data.as_slice());
-        if let Err(err) = sender.send((entity, data)) {
+        if let Err(err) = sender.send((ident, data)) {
             log::error!("send data to ecs failed {}", err);
         }
     })
@@ -377,7 +428,7 @@ pub trait Input {
     /// If entity is none and current type is Login, a new entity will be created.
     fn add_component(
         self,
-        entity: Option<Entity>,
+        ident: RequestIdent,
         world: &World,
     ) -> std::result::Result<(), specs::error::Error>;
 
@@ -389,11 +440,11 @@ pub trait Input {
 }
 
 pub struct InputSystem<T> {
-    receiver: Receiver<(Option<Entity>, T)>,
+    receiver: Receiver<RequestData<T>>,
 }
 
 impl<T> InputSystem<T> {
-    pub fn new(receiver: Receiver<(Option<Entity>, T)>) -> InputSystem<T> {
+    pub fn new(receiver: Receiver<RequestData<T>>) -> InputSystem<T> {
         Self { receiver }
     }
 }
@@ -403,8 +454,8 @@ where
     T: Input + Send + Sync + 'static,
 {
     fn run_now(&mut self, world: &'a World) {
-        self.receiver.try_iter().for_each(|(entity, data)| {
-            data.add_component(entity, world);
+        self.receiver.try_iter().for_each(|(ident, data)| {
+            data.add_component(ident, world);
         })
     }
 

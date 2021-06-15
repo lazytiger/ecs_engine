@@ -280,36 +280,28 @@ impl Generator {
         let data = quote!(
             #(mod #mods;)*
 
-            use ecs_engine::{network::Input, ReadOnly};
+            use ecs_engine::{network::{RequestIdent, Input}, ReadOnly, HashComponent, NetToken};
             use protobuf::Message;
             use specs::{error::Error, Builder, Component, Entity, HashMapStorage, World, WorldExt};
             use std::ops::Deref;
 
-            pub struct ComponentWrapper<T> {
-                data:T
-            }
-
-            impl<T> Deref for ComponentWrapper<T> {
-                type Target = T;
-
-                fn deref(&self) -> &Self::Target {
-                    &self.data
-                }
-            }
-
-            impl<T: 'static + Send + Sync> Component for ComponentWrapper<T> {
-                type Storage = HashMapStorage<Self>;
-            }
-
-            #(pub type #names = ComponentWrapper<#files::#names>;)*
+            #(pub type #names = HashComponent<#files::#names>;)*
 
             pub enum Request {
                 #(#names(#names),)*
             }
 
             impl Input for Request {
-                fn add_component(self, entity:Option<Entity>, world: &World) ->Result<(), Error> {
-                    let entity = entity.unwrap_or(world.entities().create());
+                fn add_component(self, ident: RequestIdent, world: &World) ->Result<(), Error> {
+                    let entity = if ident.is_token() {
+                        let token = ident.token();
+                        let entity = world.entities().create();
+                        world.write_component::<NetToken>().insert(entity, NetToken::new(token)).map(|_|())?;
+                        entity
+                    } else {
+                        ident.entity()
+                    };
+
                     match self {
                         #(Request::#names(c) => world.write_component::<#names>().insert(entity, c).map(|_|()),)*
                     }
@@ -325,7 +317,7 @@ impl Generator {
                             #cmds => {
                                 let mut data = #files::#names::new();
                                 data.merge_from_bytes(buffer).unwrap();
-                                Request::#names(ComponentWrapper{data})
+                                Request::#names(#names::new(data))
                             },
                     )*
                         _ => panic!("unexpected cmd {}", cmd),

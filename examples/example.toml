@@ -1,6 +1,6 @@
 [[configs]]
 name = "UserLogin"
-type = "Component"
+type = "Request"
 
 [configs.component]
 flagged = false

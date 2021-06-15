@@ -3,7 +3,7 @@ use specs::{
     ReadStorage, System, World, WorldExt, Write, WriteStorage,
 };
 
-use ecs_engine::{Changeset, DynamicManager, DynamicSystem, SerDe};
+use ecs_engine::{Changeset, DynamicManager, DynamicSystem, HashComponent};
 use specs::world::Index;
 
 #[derive(Clone, Default, Component)]
