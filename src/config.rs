@@ -116,6 +116,7 @@ pub enum Error {
     Io(std::io::Error),
     De(toml::de::Error),
     DuplicateFieldNumber(String),
+    DuplicateCmd,
 }
 
 fn read_files(input_dir: PathBuf) -> std::io::Result<Vec<PathBuf>> {
@@ -266,6 +267,14 @@ impl Generator {
                 files.push(mod_name.clone());
                 names.push(format_ident!("{}", c.name));
             }
+        }
+
+        let mut n_cmds = cmds.clone();
+        let cmd_count = n_cmds.len();
+        n_cmds.sort();
+        n_cmds.dedup();
+        if cmd_count != n_cmds.len() {
+            return Err(Error::DuplicateCmd);
         }
 
         let data = quote!(
