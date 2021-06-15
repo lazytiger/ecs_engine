@@ -13,7 +13,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-struct Connection<T: Fn(&[u8]) -> usize, const N: usize> {
+#[derive(Default, Clone)]
+pub struct Header {
+    pub length: usize,
+    pub cmd: u32,
+    //TODO more flags for expand Header
+}
+
+struct Connection<T, const N: usize>
+where
+    T: Fn([u8; N]) -> Header,
+{
     stream: TcpStream,
     tag: String,
     token: Token,
@@ -22,13 +32,23 @@ struct Connection<T: Fn(&[u8]) -> usize, const N: usize> {
     read_bytes: Vec<u8>,
     write_bytes: Vec<u8>,
     last_time: Instant,
-    header: [u8; N],
+    header_raw: [u8; N],
     decoder: T,
-    length: usize,
+    header: Header,
+    sender: Sender<NetworkInputData>,
+    entity: Option<Entity>,
 }
 
-impl<T: Fn(&[u8]) -> usize, const N: usize> Connection<T, N> {
-    pub fn new(stream: TcpStream, addr: SocketAddr, decoder: T) -> Self {
+impl<T, const N: usize> Connection<T, N>
+where
+    T: Fn([u8; N]) -> Header,
+{
+    pub fn new(
+        stream: TcpStream,
+        addr: SocketAddr,
+        decoder: T,
+        sender: Sender<NetworkInputData>,
+    ) -> Self {
         let tag = addr.to_string();
         Self {
             stream,
@@ -39,9 +59,11 @@ impl<T: Fn(&[u8]) -> usize, const N: usize> Connection<T, N> {
             read_bytes: Vec::with_capacity(1024),
             write_bytes: Vec::with_capacity(1024),
             last_time: Instant::now(),
-            header: [0; N],
+            header_raw: [0; N],
             decoder,
-            length: 0,
+            header: Header::default(),
+            sender,
+            entity: None,
         }
     }
 
@@ -129,23 +151,25 @@ impl<T: Fn(&[u8]) -> usize, const N: usize> Connection<T, N> {
         }
 
         let mut read_bytes = self.read_bytes.as_slice();
-        if self.length == 0 && read_bytes.len() >= N {
-            self.header.copy_from_slice(read_bytes);
-            self.length = (self.decoder)(&self.header);
+        if self.header.length == 0 && read_bytes.len() >= N {
+            self.header_raw.copy_from_slice(read_bytes);
+            self.header = (self.decoder)(self.header_raw);
             read_bytes = &read_bytes[N..];
         }
 
-        while self.length > 0 && read_bytes.len() >= self.length {
-            let body: Vec<_> = read_bytes[..self.length].into();
-            //self.sender.send((self.index, self.header, body));
-            read_bytes = &read_bytes[self.length..];
-            self.length = 0;
+        while self.header.length > 0 && read_bytes.len() >= self.header.length {
+            let body: Vec<_> = read_bytes[..self.header.length].into();
+            if let Err(err) = self.sender.send((self.entity, self.header.clone(), body)) {
+                log::error!("send data to ecs failed:{}", err);
+                //todo close
+            }
+            read_bytes = &read_bytes[self.header.length..];
             if read_bytes.len() >= N {
-                self.header.copy_from_slice(read_bytes);
-                self.length = (self.decoder)(&self.header);
+                self.header_raw.copy_from_slice(read_bytes);
+                self.header = (self.decoder)(self.header_raw);
                 read_bytes = &read_bytes[N..];
             } else {
-                self.length = 0;
+                self.header.length = 0;
             }
         }
 
@@ -173,10 +197,14 @@ impl<T: Fn(&[u8]) -> usize, const N: usize> Connection<T, N> {
     }
 }
 
-pub type NetworkInputData = (Option<Entity>, Vec<u8>);
+pub type NetworkInputData = (Option<Entity>, Header, Vec<u8>);
 pub type NetworkOutputData = (usize, Vec<u8>);
 
-struct Listener<T: Fn(&[u8]) -> usize + Clone, const N: usize> {
+struct Listener<T, const N: usize>
+where
+    T: Clone,
+    T: Fn([u8; N]) -> Header,
+{
     listener: TcpListener,
     conns: Slab<Connection<T, N>>,
     sender: Sender<NetworkInputData>,
@@ -184,7 +212,11 @@ struct Listener<T: Fn(&[u8]) -> usize + Clone, const N: usize> {
     decoder: T,
 }
 
-impl<T: Fn(&[u8]) -> usize + Clone, const N: usize> Listener<T, N> {
+impl<T, const N: usize> Listener<T, N>
+where
+    T: Clone,
+    T: Fn([u8; N]) -> Header,
+{
     pub fn new(
         listener: TcpListener,
         capacity: usize,
@@ -209,7 +241,8 @@ impl<T: Fn(&[u8]) -> usize + Clone, const N: usize> Listener<T, N> {
                 }
                 Err(err) => return Err(err),
                 Ok((stream, addr)) => {
-                    let conn = Connection::new(stream, addr, self.decoder.clone());
+                    let conn =
+                        Connection::new(stream, addr, self.decoder.clone(), self.sender.clone());
                     self.insert(conn, poll);
                 }
             }
@@ -266,13 +299,18 @@ impl<T: Fn(&[u8]) -> usize + Clone, const N: usize> Listener<T, N> {
 const LISTENER: Token = Token(1);
 const ECS_SENDER: Token = Token(2);
 
-pub fn run_network(
+pub fn run_network<D, const N: usize>(
     address: SocketAddr,
     sender: Sender<NetworkInputData>,
     receiver: Receiver<NetworkOutputData>,
-) -> Result<()> {
+    decoder: D,
+) -> Result<()>
+where
+    D: Fn([u8; N]) -> Header,
+    D: Clone,
+{
     let listener = TcpListener::bind(address)?;
-    let mut listener = Listener::<_, 8>::new(listener, 4096, sender, receiver, |data| 0);
+    let mut listener = Listener::new(listener, 4096, sender, receiver, decoder);
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(1024);
     let mut poll_timeout = Duration::new(1, 0);
@@ -295,11 +333,14 @@ pub fn run_network(
     }
 }
 
-pub fn async_run<T>(addr: SocketAddr) -> (Receiver<(Option<Entity>, T)>, Sender<NetworkOutputData>)
+pub fn async_run<T, D, const N: usize>(
+    addr: SocketAddr,
+    decoder: D,
+) -> (Receiver<(Option<Entity>, T)>, Sender<NetworkOutputData>)
 where
-    T: Send,
-    T: 'static,
-    T: Input,
+    T: Send + Input + 'static,
+    D: Fn([u8; N]) -> Header,
+    D: Clone + Sync + Send + 'static,
 {
     // network send data to decode, one-to-one
     let (network_sender, network_receiver) = channel::<NetworkInputData>();
@@ -308,7 +349,7 @@ where
     // ecs send data to network many-to-one
     let (response_sender, response_receiver) = channel::<NetworkOutputData>();
     rayon::spawn(move || {
-        if let Err(err) = run_network(addr, network_sender, response_receiver) {
+        if let Err(err) = run_network(addr, network_sender, response_receiver, decoder) {
             log::error!("network thread quit with error:{}", err);
         }
     });
@@ -322,9 +363,8 @@ fn run_decode<T>(sender: Sender<(Option<Entity>, T)>, receiver: Receiver<Network
 where
     T: Input,
 {
-    receiver.iter().for_each(|(entity, data)| {
-        //TODO
-        let data = T::decode(0, data.as_slice());
+    receiver.iter().for_each(|(entity, header, data)| {
+        let data = T::decode(header.cmd, data.as_slice());
         if let Err(err) = sender.send((entity, data)) {
             log::error!("send data to ecs failed {}", err);
         }
