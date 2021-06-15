@@ -279,16 +279,11 @@ impl Generator {
 
         let data = quote!(
             #(mod #mods;)*
-            use ecs_engine::network::Input;
-            use ecs_engine::ReadOnly;
-            use specs::World;
-            use specs::Entity;
-            use specs::WorldExt;
-            use specs::HashMapStorage;
-            use specs::Component;
-            use specs::error::Error;
-            use std::ops::Deref;
+
+            use ecs_engine::{network::Input, ReadOnly};
             use protobuf::Message;
+            use specs::{error::Error, Builder, Component, Entity, HashMapStorage, World, WorldExt};
+            use std::ops::Deref;
 
             pub struct ComponentWrapper<T> {
                 data:T
@@ -313,9 +308,10 @@ impl Generator {
             }
 
             impl Input for Request {
-                fn add_component(self, entity:Option<Entity>, world:&World) ->Result<(), Error> {
+                fn add_component(self, entity:Option<Entity>, world: &World) ->Result<(), Error> {
+                    let entity = entity.unwrap_or(world.entities().create());
                     match self {
-                        #(Request::#names(c) => world.write_component::<#names>().insert(entity.unwrap(), c).map(|_|()),)*
+                        #(Request::#names(c) => world.write_component::<#names>().insert(entity, c).map(|_|()),)*
                     }
                 }
 

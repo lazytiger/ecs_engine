@@ -4,7 +4,7 @@ use mio::{
     Events, Interest, Poll, Registry, Token,
 };
 use slab::Slab;
-use specs::{world::Index, Entity, RunNow, World};
+use specs::{world::Index, Entity, LazyUpdate, RunNow, World, WorldExt};
 use std::{
     io::{ErrorKind, Read, Result, Write},
     marker::PhantomData,
@@ -360,7 +360,7 @@ impl<T> InputSystem<T> {
 
 impl<'a, T> RunNow<'a> for InputSystem<T>
 where
-    T: Input,
+    T: Input + Send + Sync + 'static,
 {
     fn run_now(&mut self, world: &'a World) {
         self.receiver.try_iter().for_each(|(entity, data)| {

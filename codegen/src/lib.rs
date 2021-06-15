@@ -192,7 +192,7 @@ fn contains_duplicate(data: &Vec<Type>) -> bool {
 impl Config {
     fn parse(attr: SystemAttr, item: &mut ItemFn) -> Result<Self, Error> {
         let mut to_remove = Vec::new();
-        let mut dynamic = false;
+        let mut dynamic = true;
         let mut fstatic = false;
         let mut lib_name = None;
         let mut func_name = None;
