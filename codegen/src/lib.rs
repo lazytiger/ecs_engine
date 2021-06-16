@@ -914,12 +914,7 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
                 call_names.push(name.clone());
                 match pt.ty.as_mut() {
                     Type::Reference(r) => {
-                        if r.mutability.is_some() {
-                            input_names.push(quote!(unsafe {::std::mem::transmute(#name)}));
-                        } else {
-                            input_names.push(quote!(#name));
-                        }
-                        r.mutability = None;
+                        input_names.push(quote!(#name));
                         input_types.push(pt.ty.as_ref().clone());
                     }
                     _ => unreachable!(),
