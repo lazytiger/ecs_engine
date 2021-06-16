@@ -312,6 +312,12 @@ component!(DenseVecStorage, DenseVecComponent);
 
 pub type NetToken = HashComponent<Token>;
 
+impl NetToken {
+    pub fn token(&self) -> Token {
+        self.data
+    }
+}
+
 pub struct ChangeSet<T> {
     data: T,
     mask_db: u64,

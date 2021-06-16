@@ -249,7 +249,7 @@ where
 
 pub type NetworkInputData = (RequestIdent, Header, Vec<u8>);
 pub type RequestData<T> = (RequestIdent, T);
-pub type NetworkOutputData = (usize, Vec<u8>);
+pub type NetworkOutputData = (Token, Vec<u8>);
 
 struct Listener<T, const N: usize>
 where
@@ -318,10 +318,10 @@ where
     pub fn do_send(&mut self) {
         let receiver = self.receiver.take().unwrap();
         receiver.try_iter().for_each(|(token, data)| {
-            if let Some(conn) = self.conns.get_mut(token) {
+            if let Some(conn) = self.conns.get_mut(token.0) {
                 conn.send(data.as_slice());
             } else {
-                log::error!("connection:{} not found", token);
+                log::error!("connection:{} not found", token.0);
             }
         });
         self.receiver.replace(receiver);

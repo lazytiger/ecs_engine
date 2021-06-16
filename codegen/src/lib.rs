@@ -192,7 +192,7 @@ fn contains_duplicate(data: &Vec<Type>) -> bool {
 impl Config {
     fn parse(attr: SystemAttr, item: &mut ItemFn) -> Result<Self, Error> {
         let mut to_remove = Vec::new();
-        let mut dynamic = true;
+        let mut dynamic = false;
         let mut fstatic = false;
         let mut lib_name = None;
         let mut func_name = None;
@@ -224,6 +224,8 @@ impl Config {
         }
         if dynamic && fstatic {
             return Err(Error::StaticConflictsDynamic);
+        } else if !dynamic && !fstatic {
+            dynamic = true;
         }
 
         for i in to_remove {
@@ -541,6 +543,12 @@ impl Config {
                         #(world.register::<#component_types>();)*
                         #dynamic_init
                         builder.add(self, #func_name, &[]);
+                    }
+
+                    pub fn new() -> Self {
+                        Self {
+                            #(#state_names: Default::default(),)*
+                        }
                     }
                 }
         };
@@ -930,7 +938,7 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     let pinput = quote! {
         fn #name(#(#call_names:#input_types,)*) -> ::std::thread::Result<#return_type> {
-            ::std::panic::catch_unwind(||#pname(#(#input_names,)*))
+            ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(||#pname(#(#input_names,)*)))
         }
     };
 
