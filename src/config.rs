@@ -157,13 +157,13 @@ impl Generator {
     }
 
     fn parse_config(config_dir: PathBuf) -> Result<Vec<(PathBuf, ConfigFile)>, Error> {
-        let files = read_files(config_dir).map_err(Error::from)?;
+        let files = read_files(config_dir)?;
         let mut configs = Vec::new();
         for input in files {
-            let mut file = File::open(&input).map_err(Error::from)?;
+            let mut file = File::open(&input)?;
             let mut data = String::new();
-            file.read_to_string(&mut data).map_err(Error::from)?;
-            let cf: ConfigFile = toml::from_str(data.as_str()).map_err(Error::from)?;
+            file.read_to_string(&mut data)?;
+            let cf: ConfigFile = toml::from_str(data.as_str())?;
             if let Some(config) = cf.configs.iter().find(|config| {
                 let mut fields: Vec<_> = config.fields.iter().map(|(_, f)| f.field).collect();
                 let count = fields.len();
@@ -237,8 +237,8 @@ impl Generator {
             name.push(".proto");
             let mut path = output_dir.clone();
             path.push(name);
-            let mut file = File::create(path).map_err(Error::from)?;
-            Self::gen_message(&mut file, &v).map_err(Error::from)?;
+            let mut file = File::create(path)?;
+            Self::gen_message(&mut file, &v)?;
         }
         Ok(())
     }
@@ -277,12 +277,17 @@ impl Generator {
             return Err(Error::DuplicateCmd);
         }
 
+        #[cfg(feature = "debug")]
+        let pub_ident = quote!(pub);
+        #[cfg(not(feature = "debug"))]
+        let pub_ident = quote!();
+
         let data = quote!(
-            #(mod #mods;)*
+            #(#pub_ident mod #mods;)*
 
             use crossbeam::channel::Sender;
             use ecs_engine::{
-                network::{Input, NetworkOutputData, RequestIdent, Response},
+                network::{Input, RequestIdent, ResponseSender},
                 HashComponent, NetToken, ReadOnly,
             };
             use protobuf::Message;
@@ -296,14 +301,12 @@ impl Generator {
             }
 
             impl Input for Request {
-                fn add_component(self, ident: RequestIdent, world: &World, sender: &Sender<NetworkOutputData>) ->Result<(), Error> {
+                fn add_component(self, ident: RequestIdent, world: &World, sender: &ResponseSender) ->Result<(), Error> {
                     let entity = if ident.is_token() {
                         let token = ident.token();
                         let entity = world.entities().create();
                         world.write_component::<NetToken>().insert(entity, NetToken::new(token)).map(|_|())?;
-                        if let Err(err) = sender.send((token, Response::Entity(entity))) {
-                            log::error!("send entity to network failed:{}", err);
-                        }
+                        sender.send_entity(token, entity);
                         entity
                     } else {
                         ident.entity()
@@ -329,6 +332,26 @@ impl Generator {
                     )*
                         _ => panic!("unexpected cmd {}", cmd),
                     }
+                }
+
+                #[cfg(feature="debug")]
+                fn encode(&self) -> Vec<u8> {
+                    let mut data = vec![0u8;8];
+                    let cmd = match self {
+                        #(
+                            Request::#names(r) => {
+                                r.write_to_vec(&mut data).unwrap();
+                                #cmds
+                            },
+                        )*
+                    };
+                    unsafe {
+                        let header:[u8; 8]  = std::mem::transmute(((data.len() - 8) as u32,  cmd as u32));
+                        let data = data.as_mut_slice();
+                        let data = &mut data[..8];
+                        data.copy_from_slice(&header);
+                    }
+                    data
                 }
             }
         )

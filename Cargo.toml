@@ -28,5 +28,9 @@ protobuf-codegen-pure = { path = "../protobuf/protobuf-codegen-pure" }
 md5 = "0.7"
 crossbeam = "0.8"
 
+[features]
+debug = []
+bounded = []
+
 [workspace]
 members = ["codegen"]

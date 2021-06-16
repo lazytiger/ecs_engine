@@ -47,31 +47,40 @@ impl Library {
 
     pub fn get<T>(&self, name: &String) -> Option<Symbol<T>> {
         if self.lib.is_none() {
+            log::debug!("library is not set");
             return None;
         }
 
         let mut bname = name.as_bytes().to_owned();
         bname.push(0);
         unsafe {
-            if let Ok(f) = self.lib.as_ref().unwrap().get::<fn()>(bname.as_slice()) {
-                Some(std::mem::transmute(f.into_raw()))
-            } else {
-                None
+            match self.lib.as_ref().unwrap().get::<fn()>(bname.as_slice()) {
+                Ok(f) => Some(std::mem::transmute(f.into_raw())),
+                Err(err) => {
+                    log::error!(
+                        "get function {} from library {} failed {}",
+                        name,
+                        self.name,
+                        err
+                    );
+                    None
+                }
             }
         }
     }
 
     pub fn reload(&mut self) {
         let name = libloading::library_filename(self.name.as_str());
+        log::debug!("loading library {:?}", name);
         match unsafe { libloading::Library::new(name) } {
             Ok(lib) => {
                 if let Some(olib) = self.lib.take() {
                     if let Err(err) = olib.close() {
                         log::error!("close library `{}` failed with `{:?}`", self.name, err);
                     }
-                    self.lib.replace(lib);
-                    self.generation += 1;
                 }
+                self.lib.replace(lib);
+                self.generation += 1;
             }
             Err(err) => log::error!("open library `{}` failed with `{:?}`", self.name, err),
         }
@@ -155,6 +164,7 @@ impl<T> DynamicSystem<T> {
                 self.lname, self.fname
             )
         }
+        log::info!("init dynamic library {}, function:{}", lname, fname);
         self.lname = lname;
         self.fname = fname;
         self.get_symbol(dm);

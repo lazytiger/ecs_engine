@@ -5,7 +5,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::{Receiver, Sender};
+
+#[cfg(feature = "bounded")]
+use crossbeam::channel::bounded as channel;
+#[cfg(not(feature = "bounded"))]
+use crossbeam::channel::unbounded as channel;
 
 use crate::config::ConfigType::Request;
 use mio::{
@@ -264,7 +269,7 @@ pub enum Response {
 
 pub type NetworkInputData = (RequestIdent, Header, Vec<u8>);
 pub type RequestData<T> = (RequestIdent, T);
-pub type NetworkOutputData = (Token, Response);
+pub type NetworkOutputData = (Vec<Token>, Response);
 
 struct Listener<T, const N: usize>
 where
@@ -332,15 +337,17 @@ where
 
     pub fn do_send(&mut self) {
         let receiver = self.receiver.take().unwrap();
-        receiver.try_iter().for_each(|(token, data)| {
-            if let Some(conn) = self.conns.get_mut(token.0) {
-                match data {
-                    Response::Data(data) => conn.send(data.as_slice()),
-                    Response::Entity(entity) => conn.set_entity(entity),
-                    Response::Close => conn.close(),
+        receiver.try_iter().for_each(|(tokens, data)| {
+            for token in tokens {
+                if let Some(conn) = self.conns.get_mut(token.0) {
+                    match &data {
+                        Response::Data(data) => conn.send(data.as_slice()),
+                        Response::Entity(entity) => conn.set_entity(*entity),
+                        Response::Close => conn.close(),
+                    }
+                } else {
+                    log::error!("connection:{} not found", token.0);
                 }
-            } else {
-                log::error!("connection:{} not found", token.0);
             }
         });
         self.receiver.replace(receiver);
@@ -413,11 +420,11 @@ where
     D: Clone + Sync + Send + 'static,
 {
     // network send data to decode, one-to-one
-    let (network_sender, network_receiver) = unbounded::<NetworkInputData>();
+    let (network_sender, network_receiver) = channel::<NetworkInputData>();
     // decode send data to ecs, one-to-one
-    let (request_sender, request_receiver) = unbounded::<RequestData<T>>();
+    let (request_sender, request_receiver) = channel::<RequestData<T>>();
     // ecs send data to network many-to-one
-    let (response_sender, response_receiver) = unbounded::<NetworkOutputData>();
+    let (response_sender, response_receiver) = channel::<NetworkOutputData>();
     rayon::spawn(move || {
         if let Err(err) = run_network(addr, network_sender, response_receiver, decoder) {
             log::error!("network thread quit with error:{}", err);
@@ -449,7 +456,7 @@ pub trait Input {
         self,
         ident: RequestIdent,
         world: &World,
-        sender: &Sender<NetworkOutputData>,
+        sender: &ResponseSender,
     ) -> std::result::Result<(), specs::error::Error>;
 
     /// Register all the actual types as components
@@ -457,6 +464,9 @@ pub trait Input {
 
     /// Decode actual type as header specified.
     fn decode(cmd: u32, data: &[u8]) -> Self;
+
+    #[cfg(feature = "debug")]
+    fn encode(&self) -> Vec<u8>;
 }
 
 pub struct InputSystem<T> {
@@ -474,13 +484,48 @@ where
     T: Input + Send + Sync + 'static,
 {
     fn run_now(&mut self, world: &'a World) {
-        let sender = world.read_resource::<Option<Sender<NetworkOutputData>>>();
+        let sender = world.read_resource::<ResponseSender>();
         self.receiver.try_iter().for_each(|(ident, data)| {
-            data.add_component(ident, world, sender.as_ref().unwrap());
+            data.add_component(ident, world, &sender);
         })
     }
 
     fn setup(&mut self, world: &mut World) {
         T::setup(world);
+    }
+}
+
+#[derive(Default)]
+pub struct ResponseSender {
+    sender: Option<Sender<NetworkOutputData>>,
+}
+
+impl ResponseSender {
+    pub fn new(sender: Sender<NetworkOutputData>) -> Self {
+        Self {
+            sender: Some(sender),
+        }
+    }
+
+    fn broadcast(&self, tokens: Vec<Token>, response: Response) {
+        if let Err(err) = self.sender.as_ref().unwrap().send((tokens, response)) {
+            log::error!("send response to network failed {}", err);
+        }
+    }
+
+    fn broadcast_data(&self, tokens: Vec<Token>, data: Vec<u8>) {
+        self.broadcast(tokens, Response::Data(data));
+    }
+
+    pub fn send_data(&self, token: Token, data: Vec<u8>) {
+        self.broadcast(vec![token], Response::Data(data));
+    }
+
+    pub fn send_entity(&self, token: Token, entity: Entity) {
+        self.broadcast(vec![token], Response::Entity(entity));
+    }
+
+    pub fn send_close(&self, token: Token) {
+        self.broadcast(vec![token], Response::Close);
     }
 }
