@@ -2,9 +2,10 @@ use std::{
     io::{ErrorKind, Read, Result, Write},
     marker::PhantomData,
     net::{Shutdown, SocketAddr},
-    sync::mpsc::{channel, Receiver, Sender},
     time::{Duration, Instant},
 };
+
+use crossbeam::channel::{unbounded, Receiver, Sender};
 
 use crate::config::ConfigType::Request;
 use mio::{
@@ -245,11 +246,25 @@ where
         self.token = token;
         self.ident.replace_token(token);
     }
+
+    fn set_entity(&mut self, entity: Entity) {
+        if self.ident.is_entity() {
+            log::error!("entity already set for connection:{}", self.tag);
+            return;
+        }
+        self.ident.replace_entity(entity);
+    }
+}
+
+pub enum Response {
+    Entity(Entity),
+    Data(Vec<u8>),
+    Close,
 }
 
 pub type NetworkInputData = (RequestIdent, Header, Vec<u8>);
 pub type RequestData<T> = (RequestIdent, T);
-pub type NetworkOutputData = (Token, Vec<u8>);
+pub type NetworkOutputData = (Token, Response);
 
 struct Listener<T, const N: usize>
 where
@@ -303,7 +318,7 @@ where
     fn insert(&mut self, conn: Connection<T, N>, poll: &Poll) {
         let index = self.conns.insert(conn);
         let conn = self.conns.get_mut(index).unwrap();
-        conn.token = Token(index);
+        conn.set_token(Token(index));
         conn.setup(poll.registry());
     }
 
@@ -319,7 +334,11 @@ where
         let receiver = self.receiver.take().unwrap();
         receiver.try_iter().for_each(|(token, data)| {
             if let Some(conn) = self.conns.get_mut(token.0) {
-                conn.send(data.as_slice());
+                match data {
+                    Response::Data(data) => conn.send(data.as_slice()),
+                    Response::Entity(entity) => conn.set_entity(entity),
+                    Response::Close => conn.close(),
+                }
             } else {
                 log::error!("connection:{} not found", token.0);
             }
@@ -394,11 +413,11 @@ where
     D: Clone + Sync + Send + 'static,
 {
     // network send data to decode, one-to-one
-    let (network_sender, network_receiver) = channel::<NetworkInputData>();
+    let (network_sender, network_receiver) = unbounded::<NetworkInputData>();
     // decode send data to ecs, one-to-one
-    let (request_sender, request_receiver) = channel::<RequestData<T>>();
+    let (request_sender, request_receiver) = unbounded::<RequestData<T>>();
     // ecs send data to network many-to-one
-    let (response_sender, response_receiver) = channel::<NetworkOutputData>();
+    let (response_sender, response_receiver) = unbounded::<NetworkOutputData>();
     rayon::spawn(move || {
         if let Err(err) = run_network(addr, network_sender, response_receiver, decoder) {
             log::error!("network thread quit with error:{}", err);
@@ -430,6 +449,7 @@ pub trait Input {
         self,
         ident: RequestIdent,
         world: &World,
+        sender: &Sender<NetworkOutputData>,
     ) -> std::result::Result<(), specs::error::Error>;
 
     /// Register all the actual types as components
@@ -454,8 +474,9 @@ where
     T: Input + Send + Sync + 'static,
 {
     fn run_now(&mut self, world: &'a World) {
+        let sender = world.read_resource::<Option<Sender<NetworkOutputData>>>();
         self.receiver.try_iter().for_each(|(ident, data)| {
-            data.add_component(ident, world);
+            data.add_component(ident, world, sender.as_ref().unwrap());
         })
     }
 

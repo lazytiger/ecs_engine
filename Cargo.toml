@@ -26,6 +26,7 @@ syn = "1.0"
 quote = "1.0"
 protobuf-codegen-pure = { path = "../protobuf/protobuf-codegen-pure" }
 md5 = "0.7"
+crossbeam = "0.8"
 
 [workspace]
 members = ["codegen"]

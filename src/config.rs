@@ -280,7 +280,11 @@ impl Generator {
         let data = quote!(
             #(mod #mods;)*
 
-            use ecs_engine::{network::{RequestIdent, Input}, ReadOnly, HashComponent, NetToken};
+            use crossbeam::channel::Sender;
+            use ecs_engine::{
+                network::{Input, NetworkOutputData, RequestIdent, Response},
+                HashComponent, NetToken, ReadOnly,
+            };
             use protobuf::Message;
             use specs::{error::Error, Builder, Component, Entity, HashMapStorage, World, WorldExt};
             use std::ops::Deref;
@@ -292,11 +296,14 @@ impl Generator {
             }
 
             impl Input for Request {
-                fn add_component(self, ident: RequestIdent, world: &World) ->Result<(), Error> {
+                fn add_component(self, ident: RequestIdent, world: &World, sender: &Sender<NetworkOutputData>) ->Result<(), Error> {
                     let entity = if ident.is_token() {
                         let token = ident.token();
                         let entity = world.entities().create();
                         world.write_component::<NetToken>().insert(entity, NetToken::new(token)).map(|_|())?;
+                        if let Err(err) = sender.send((token, Response::Entity(entity))) {
+                            log::error!("send entity to network failed:{}", err);
+                        }
                         entity
                     } else {
                         ident.entity()
