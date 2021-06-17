@@ -16,11 +16,12 @@ pub use libloading::os::windows::Symbol;
 use specs::{Component, DenseVecStorage, HashMapStorage, Join, System, VecStorage, WriteStorage};
 use std::{marker::PhantomData, ops::DerefMut};
 
+use crate::dlog::{log_param, LogParam};
 pub use codegen::{changeset, export, system};
 use mio::Token;
-use std::panic::{catch_unwind, UnwindSafe};
 
 pub mod config;
+pub mod dlog;
 pub mod network;
 pub struct Library {
     name: String,
@@ -76,8 +77,8 @@ impl Library {
                 self.lib.replace(lib);
                 self.generation += 1;
                 let fname = "init_logger".into();
-                if let Some(f) = self.get::<fn()>(&fname) {
-                    f();
+                if let Some(f) = self.get::<fn(LogParam)>(&fname) {
+                    f(log_param());
                 }
             }
             Err(err) => log::error!("open library `{}` failed with `{:?}`", self.name, err),
@@ -408,15 +409,5 @@ impl<T> Deref for ReadOnly<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.data
-    }
-}
-
-pub fn setup_logger_safe<T>(callback: T)
-where
-    T: Fn(),
-    T: UnwindSafe,
-{
-    if let Err(err) = catch_unwind(callback) {
-        eprintln!("setup logger failed:{:?}", err);
     }
 }
