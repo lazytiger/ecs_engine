@@ -1055,3 +1055,17 @@ pub fn changeset(_attr: TokenStream, item: TokenStream) -> TokenStream {
     )
     .into()
 }
+
+#[proc_macro_attribute]
+pub fn init_log(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemFn);
+    quote!(
+        #input
+
+        #[no_mangle]
+        extern "C" fn init_logger(param: LogParam) {
+            init(param);
+        }
+    )
+    .into()
+}

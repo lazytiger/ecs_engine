@@ -17,7 +17,7 @@ use specs::{Component, DenseVecStorage, HashMapStorage, Join, System, VecStorage
 use std::{marker::PhantomData, ops::DerefMut};
 
 use crate::dlog::{log_param, LogParam};
-pub use codegen::{changeset, export, system};
+pub use codegen::{changeset, export, init_log, system};
 use mio::Token;
 
 pub mod config;
