@@ -18,6 +18,7 @@ use std::{marker::PhantomData, ops::DerefMut};
 
 pub use codegen::{changeset, export, system};
 use mio::Token;
+use std::panic::{catch_unwind, UnwindSafe};
 
 pub mod config;
 pub mod network;
@@ -74,6 +75,10 @@ impl Library {
                 }
                 self.lib.replace(lib);
                 self.generation += 1;
+                let fname = "init_logger".into();
+                if let Some(f) = self.get::<fn()>(&fname) {
+                    f();
+                }
             }
             Err(err) => log::error!("open library `{}` failed with `{:?}`", self.name, err),
         }
@@ -403,5 +408,15 @@ impl<T> Deref for ReadOnly<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.data
+    }
+}
+
+pub fn setup_logger_safe<T>(callback: T)
+where
+    T: Fn(),
+    T: UnwindSafe,
+{
+    if let Err(err) = catch_unwind(callback) {
+        eprintln!("setup logger failed:{:?}", err);
     }
 }
