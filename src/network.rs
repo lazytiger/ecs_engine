@@ -18,10 +18,11 @@ use crate::config::ConfigType::Request;
 use mio::{
     event::Event,
     net::{TcpListener, TcpStream},
-    Events, Interest, Poll, Registry, Token,
+    Events, Interest, Poll, Registry, Token, Waker,
 };
 use slab::Slab;
 use specs::{world::Index, Entity, LazyUpdate, RunNow, World, WorldExt};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum RequestIdent {
@@ -263,6 +264,7 @@ where
     }
 
     fn set_entity(&mut self, entity: Entity) {
+        log::debug!("[{}]got entity:{:?}", self.tag, entity);
         if self.ident.is_entity() {
             log::error!("entity already set for connection:{}", self.tag);
             return;
@@ -388,6 +390,7 @@ const LISTENER: Token = Token(1);
 const ECS_SENDER: Token = Token(2);
 
 pub fn run_network<D, const N: usize>(
+    mut poll: Poll,
     address: SocketAddr,
     sender: Sender<NetworkInputData>,
     receiver: Receiver<NetworkOutputData>,
@@ -397,7 +400,6 @@ where
     D: HeaderFn,
     D: Clone,
 {
-    let mut poll = Poll::new()?;
     let mut listener = TcpListener::bind(address)?;
     poll.registry()
         .register(&mut listener, LISTENER, Interest::READABLE)?;
@@ -426,7 +428,7 @@ where
 pub fn async_run<T, D, const N: usize>(
     addr: SocketAddr,
     decoder: D,
-) -> (Receiver<RequestData<T>>, Sender<NetworkOutputData>)
+) -> (Receiver<RequestData<T>>, ResponseSender)
 where
     T: Send + Input + 'static,
     D: HeaderFn,
@@ -439,15 +441,22 @@ where
     let (request_sender, request_receiver) = channel::<RequestData<T>>();
     // ecs send data to network many-to-one
     let (response_sender, response_receiver) = channel::<NetworkOutputData>();
+    let poll = Poll::new().unwrap();
+    let waker = Arc::new(Waker::new(poll.registry(), ECS_SENDER).unwrap());
     rayon::spawn(move || {
-        if let Err(err) = run_network::<_, N>(addr, network_sender, response_receiver, decoder) {
+        if let Err(err) =
+            run_network::<_, N>(poll, addr, network_sender, response_receiver, decoder)
+        {
             log::error!("network thread quit with error:{}", err);
         }
     });
     rayon::spawn(move || {
         run_decode(request_sender, network_receiver);
     });
-    (request_receiver, response_sender)
+    (
+        request_receiver,
+        ResponseSender::new(response_sender, waker),
+    )
 }
 
 fn run_decode<T>(sender: Sender<RequestData<T>>, receiver: Receiver<NetworkInputData>)
@@ -486,11 +495,12 @@ pub trait Input: Sized {
 
 pub struct InputSystem<T> {
     receiver: Receiver<RequestData<T>>,
+    sender: ResponseSender,
 }
 
 impl<T> InputSystem<T> {
-    pub fn new(receiver: Receiver<RequestData<T>>) -> InputSystem<T> {
-        Self { receiver }
+    pub fn new(receiver: Receiver<RequestData<T>>, sender: ResponseSender) -> InputSystem<T> {
+        Self { receiver, sender }
     }
 }
 
@@ -499,9 +509,9 @@ where
     T: Input + Send + Sync + 'static,
 {
     fn run_now(&mut self, world: &'a World) {
-        let sender = world.read_resource::<ResponseSender>();
         self.receiver.try_iter().for_each(|(ident, data)| {
-            data.add_component(ident, world, &sender);
+            log::debug!("new request found");
+            data.add_component(ident, world, &self.sender);
         })
     }
 
@@ -510,21 +520,26 @@ where
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ResponseSender {
     sender: Option<Sender<NetworkOutputData>>,
+    waker: Option<Arc<Waker>>,
 }
 
 impl ResponseSender {
-    pub fn new(sender: Sender<NetworkOutputData>) -> Self {
+    pub fn new(sender: Sender<NetworkOutputData>, waker: Arc<Waker>) -> Self {
         Self {
             sender: Some(sender),
+            waker: Some(waker),
         }
     }
 
     fn broadcast(&self, tokens: Vec<Token>, response: Response) {
         if let Err(err) = self.sender.as_ref().unwrap().send((tokens, response)) {
             log::error!("send response to network failed {}", err);
+        }
+        if let Err(err) = self.waker.as_ref().unwrap().wake() {
+            log::error!("wake poll failed:{}", err);
         }
     }
 

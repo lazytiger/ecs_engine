@@ -492,17 +492,14 @@ impl Config {
         let (dynamic_init, dynamic_fn, func_call) = if self.dynamic {
             system_data_types.push(quote!(::specs::Read<'a, ::ecs_engine::DynamicManager>));
             state_names.push(format_ident!("lib"));
-            state_types.push(parse_quote!(::ecs_engine::DynamicSystem<fn(#(#fn_input_types,)*) -> ::std::thread::Result<(#(#fn_output_types),*)>>));
+            state_types.push(parse_quote!(::ecs_engine::DynamicSystem<fn(#(#fn_input_types,)*) -> ::std::option::Option<(#(#fn_output_types),*)>>));
             input_names.push(quote!(dm));
             let dynamic_init = quote!(self.lib.init(#lib_name.into(), #func_name.into(), dm););
             let dynamic_fn =
                 quote!(pub type #system_fn = fn(#(#fn_input_types,)*) ->(#(#fn_output_types),*););
             let dynamic_call = quote! {
-                match {(*symbol)(#(#func_names,)*)} {
-                    Err(err)  => log::error!("call dynamic function {} panic {:?}", #func_name, err),
-                    Ok((#(#output_vnames),*)) => {
-                        #output_code
-                    }
+                if let Some((#(#output_vnames),*)) = {(*symbol)(#(#func_names,)*)} {
+                    #output_code
                 }
             };
             (dynamic_init, dynamic_fn, dynamic_call)
@@ -543,12 +540,6 @@ impl Config {
                         #(world.register::<#component_types>();)*
                         #dynamic_init
                         builder.add(self, #func_name, &[]);
-                    }
-
-                    pub fn new() -> Self {
-                        Self {
-                            #(#state_names: Default::default(),)*
-                        }
                     }
                 }
         };
@@ -899,6 +890,7 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
     input.vis = Visibility::Inherited;
     let name = input.sig.ident.clone();
     let pname = format_ident!("__private_{}", name);
+    let sname = name.to_string();
 
     let mut pinput = input.clone();
     let mut call_names = Vec::new();
@@ -932,8 +924,14 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
     let pinput = quote! {
-        fn #name(#(#call_names:#input_types,)*) -> ::std::thread::Result<#return_type> {
-            ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(||#pname(#(#input_names,)*)))
+        fn #name(#(#call_names:#input_types,)*) -> ::std::option::Option<#return_type> {
+            match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(||#pname(#(#input_names,)*))) {
+                Ok(r) => Some(r),
+                Err(err) => {
+                    log::error!("call system func {} failed:{:?}", #sname, err);
+                    None
+                }
+            }
         }
     };
 
