@@ -1,6 +1,5 @@
 use std::{
     io::{ErrorKind, Read, Result, Write},
-    marker::PhantomData,
     net::{Shutdown, SocketAddr},
     time::{Duration, Instant},
 };
@@ -14,7 +13,7 @@ use crossbeam::channel::unbounded as channel;
 
 pub trait HeaderFn = Fn(&[u8]) -> Header;
 
-use crate::config::ConfigType::Request;
+
 use mio::{
     event::Event,
     net::{TcpListener, TcpStream},
@@ -22,7 +21,7 @@ use mio::{
 };
 use slab::Slab;
 use specs::{world::Index, Entity, LazyUpdate, RunNow, World, WorldExt};
-use std::sync::Arc;
+use std::sync::{Arc};
 
 #[derive(Clone)]
 pub enum RequestIdent {
@@ -405,8 +404,8 @@ where
         .register(&mut listener, LISTENER, Interest::READABLE)?;
     let mut listener: Listener<_, N> = Listener::new(listener, 4096, sender, receiver, decoder);
     let mut events = Events::with_capacity(1024);
-    let mut poll_timeout = Duration::new(1, 0);
-    let mut read_write_timeout = Duration::new(30, 0);
+    let poll_timeout = Duration::new(1, 0);
+    let read_write_timeout = Duration::new(30, 0);
     let mut begin = Instant::now();
     loop {
         poll.poll(&mut events, Some(poll_timeout))?;

@@ -100,10 +100,10 @@ fn main() {
 
 #[export(UserDeriveSystemFn)]
 fn user_derive_test(
-    user: &UserInput,
-    bag: &mut BagInfo,
-    other: &mut usize,
-    re: &mut String,
+    _user: &UserInput,
+    _bag: &mut BagInfo,
+    _other: &mut usize,
+    _re: &mut String,
 ) -> Option<UserInfo> {
     None
 }

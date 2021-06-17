@@ -1,5 +1,5 @@
-use ecs_engine::config::{Config, ConfigFile};
-use serde_derive::{Deserialize, Serialize};
+use ecs_engine::config::{ConfigFile};
+
 use std::{convert::TryInto, fs::File, io::Read};
 
 fn main() {

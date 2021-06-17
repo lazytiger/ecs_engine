@@ -4,7 +4,7 @@ use quote::{format_ident, quote};
 use serde_derive::Deserialize;
 use std::{
     collections::HashMap,
-    fs::{read_dir, File, OpenOptions},
+    fs::{read_dir, File},
     io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
