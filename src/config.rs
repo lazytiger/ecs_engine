@@ -321,16 +321,19 @@ impl Generator {
                     #(world.register::<#names>();)*
                 }
 
-                fn decode(cmd:u32, buffer:&[u8]) ->Self {
+                fn decode(cmd:u32, buffer:&[u8]) ->Option<Self> {
                     match cmd {
                     #(
                             #cmds => {
                                 let mut data = #files::#names::new();
                                 data.merge_from_bytes(buffer).unwrap();
-                                Request::#names(#names::new(data))
+                                Some(Request::#names(#names::new(data)))
                             },
                     )*
-                        _ => panic!("unexpected cmd {}", cmd),
+                        _ => {
+                            log::error!("invalid cmd:{}", cmd);
+                            None
+                        },
                     }
                 }
 

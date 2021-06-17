@@ -1,3 +1,5 @@
+#![feature(trait_alias)]
+
 use std::{
     collections::HashMap,
     ops::Deref,

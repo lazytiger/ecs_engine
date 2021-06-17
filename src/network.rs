@@ -12,6 +12,8 @@ use crossbeam::channel::bounded as channel;
 #[cfg(not(feature = "bounded"))]
 use crossbeam::channel::unbounded as channel;
 
+pub trait HeaderFn = Fn(&[u8]) -> Header;
+
 use crate::config::ConfigType::Request;
 use mio::{
     event::Event,
@@ -63,16 +65,27 @@ impl RequestIdent {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Header {
     pub length: usize,
     pub cmd: u32,
     //TODO more flags for expand Header
 }
 
+impl Header {
+    pub fn empty(&self) -> bool {
+        self.cmd == 0
+    }
+
+    pub fn clear(&mut self) {
+        self.cmd = 0;
+        self.length = 0;
+    }
+}
+
 struct Connection<T, const N: usize>
 where
-    T: Fn([u8; N]) -> Header,
+    T: HeaderFn,
 {
     stream: TcpStream,
     tag: String,
@@ -81,7 +94,6 @@ where
     read_bytes: Vec<u8>,
     write_bytes: Vec<u8>,
     last_time: Instant,
-    header_raw: [u8; N],
     decoder: T,
     header: Header,
     sender: Sender<NetworkInputData>,
@@ -90,7 +102,7 @@ where
 
 impl<T, const N: usize> Connection<T, N>
 where
-    T: Fn([u8; N]) -> Header,
+    T: HeaderFn,
 {
     pub fn new(
         stream: TcpStream,
@@ -107,7 +119,6 @@ where
             read_bytes: Vec::with_capacity(1024),
             write_bytes: Vec::with_capacity(1024),
             last_time: Instant::now(),
-            header_raw: [0; N],
             decoder,
             header: Header::default(),
             sender,
@@ -159,6 +170,7 @@ where
     }
 
     fn do_event(&mut self, event: &Event, registry: &Registry) {
+        log::debug!("[{}]connection has event:{:?}", self.tag, event);
         if event.is_read_closed() {
         } else if event.is_readable() {
             self.do_read();
@@ -178,7 +190,7 @@ where
             match self.stream.read(&mut bytes) {
                 Ok(size) if size > 0 => self.read_bytes.extend_from_slice(&bytes[..size]),
                 Ok(_) => {
-                    log::error!("[{}]read zero byte, connecton closed", self.tag);
+                    log::error!("[{}]read zero byte, connection closed", self.tag);
                     //TODO status
                     return;
                 }
@@ -199,32 +211,29 @@ where
         }
 
         let mut read_bytes = self.read_bytes.as_slice();
-        if self.header.length == 0 && read_bytes.len() >= N {
-            self.header_raw.copy_from_slice(read_bytes);
-            self.header = (self.decoder)(self.header_raw);
-            read_bytes = &read_bytes[N..];
-        }
-
-        while self.header.length > 0 && read_bytes.len() >= self.header.length {
-            let body: Vec<_> = read_bytes[..self.header.length].into();
-            if let Err(err) = self
-                .sender
-                .send((self.ident.clone(), self.header.clone(), body))
-            {
-                log::error!("send data to ecs failed:{}", err);
-                //todo close
-            }
-            read_bytes = &read_bytes[self.header.length..];
-            if read_bytes.len() >= N {
-                self.header_raw.copy_from_slice(read_bytes);
-                self.header = (self.decoder)(self.header_raw);
+        loop {
+            if !self.header.empty() && read_bytes.len() >= self.header.length {
+                let body: Vec<_> = read_bytes[..self.header.length].into();
+                read_bytes = &read_bytes[self.header.length..];
+                if let Err(err) = self
+                    .sender
+                    .send((self.ident.clone(), self.header.clone(), body))
+                {
+                    log::error!("send data to ecs failed:{}", err);
+                    //todo close
+                }
+                self.header.clear();
+            } else if self.header.empty() && read_bytes.len() >= N {
+                self.header = (self.decoder)(&read_bytes[..N]);
                 read_bytes = &read_bytes[N..];
             } else {
-                self.header.length = 0;
+                break;
             }
         }
 
-        self.read_bytes = read_bytes.into();
+        if read_bytes.len() != self.read_bytes.len() {
+            self.read_bytes = read_bytes.into();
+        }
     }
 
     fn do_write(&mut self) {
@@ -244,7 +253,8 @@ where
     }
 
     fn closed(&self) -> bool {
-        todo!()
+        //TODO
+        false
     }
 
     fn set_token(&mut self, token: Token) {
@@ -273,8 +283,7 @@ pub type NetworkOutputData = (Vec<Token>, Response);
 
 struct Listener<T, const N: usize>
 where
-    T: Clone,
-    T: Fn([u8; N]) -> Header,
+    T: HeaderFn,
 {
     listener: TcpListener,
     conns: Slab<Connection<T, N>>,
@@ -285,8 +294,8 @@ where
 
 impl<T, const N: usize> Listener<T, N>
 where
+    T: HeaderFn,
     T: Clone,
-    T: Fn([u8; N]) -> Header,
 {
     pub fn new(
         listener: TcpListener,
@@ -308,10 +317,12 @@ where
         loop {
             match self.listener.accept() {
                 Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                    log::debug!("no more connection, stop now");
                     return Ok(());
                 }
                 Err(err) => return Err(err),
                 Ok((stream, addr)) => {
+                    log::info!("accept connection:{}", addr);
                     let conn =
                         Connection::new(stream, addr, self.decoder.clone(), self.sender.clone());
                     self.insert(conn, poll);
@@ -383,12 +394,14 @@ pub fn run_network<D, const N: usize>(
     decoder: D,
 ) -> Result<()>
 where
-    D: Fn([u8; N]) -> Header,
+    D: HeaderFn,
     D: Clone,
 {
-    let listener = TcpListener::bind(address)?;
-    let mut listener = Listener::new(listener, 4096, sender, receiver, decoder);
     let mut poll = Poll::new()?;
+    let mut listener = TcpListener::bind(address)?;
+    poll.registry()
+        .register(&mut listener, LISTENER, Interest::READABLE)?;
+    let mut listener: Listener<_, N> = Listener::new(listener, 4096, sender, receiver, decoder);
     let mut events = Events::with_capacity(1024);
     let mut poll_timeout = Duration::new(1, 0);
     let mut read_write_timeout = Duration::new(30, 0);
@@ -416,8 +429,9 @@ pub fn async_run<T, D, const N: usize>(
 ) -> (Receiver<RequestData<T>>, Sender<NetworkOutputData>)
 where
     T: Send + Input + 'static,
-    D: Fn([u8; N]) -> Header,
-    D: Clone + Sync + Send + 'static,
+    D: HeaderFn,
+    D: Clone,
+    D: Sync + Send + 'static,
 {
     // network send data to decode, one-to-one
     let (network_sender, network_receiver) = channel::<NetworkInputData>();
@@ -426,7 +440,7 @@ where
     // ecs send data to network many-to-one
     let (response_sender, response_receiver) = channel::<NetworkOutputData>();
     rayon::spawn(move || {
-        if let Err(err) = run_network(addr, network_sender, response_receiver, decoder) {
+        if let Err(err) = run_network::<_, N>(addr, network_sender, response_receiver, decoder) {
             log::error!("network thread quit with error:{}", err);
         }
     });
@@ -441,15 +455,16 @@ where
     T: Input,
 {
     receiver.iter().for_each(|(ident, header, data)| {
-        let data = T::decode(header.cmd, data.as_slice());
-        if let Err(err) = sender.send((ident, data)) {
-            log::error!("send data to ecs failed {}", err);
+        if let Some(data) = T::decode(header.cmd, data.as_slice()) {
+            if let Err(err) = sender.send((ident, data)) {
+                log::error!("send data to ecs failed {}", err);
+            }
         }
     })
 }
 
 /// Trait for requests enum type, it's an aggregation of all requests
-pub trait Input {
+pub trait Input: Sized {
     /// Match the actual type contains in enum, and add it to world.
     /// If entity is none and current type is Login, a new entity will be created.
     fn add_component(
@@ -463,7 +478,7 @@ pub trait Input {
     fn setup(world: &mut World);
 
     /// Decode actual type as header specified.
-    fn decode(cmd: u32, data: &[u8]) -> Self;
+    fn decode(cmd: u32, data: &[u8]) -> Option<Self>;
 
     #[cfg(feature = "debug")]
     fn encode(&self) -> Vec<u8>;
