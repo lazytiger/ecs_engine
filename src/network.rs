@@ -13,15 +13,14 @@ use crossbeam::channel::unbounded as channel;
 
 pub trait HeaderFn = Fn(&[u8]) -> Header;
 
-
 use mio::{
     event::Event,
     net::{TcpListener, TcpStream},
     Events, Interest, Poll, Registry, Token, Waker,
 };
 use slab::Slab;
-use specs::{world::Index, Entity, LazyUpdate, RunNow, World, WorldExt};
-use std::sync::{Arc};
+use specs::{Entity, RunNow, World};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum RequestIdent {
@@ -141,8 +140,10 @@ where
             modified = true;
             self.interests = Interest::READABLE;
         }
-        if let Err(err) = registry.reregister(&mut self.stream, self.token, self.interests) {
-            log::error!("[{}]reregister failed {}", self.tag, err);
+        if modified {
+            if let Err(err) = registry.reregister(&mut self.stream, self.token, self.interests) {
+                log::error!("[{}]reregister failed {}", self.tag, err);
+            }
         }
     }
 
@@ -511,7 +512,9 @@ where
     fn run_now(&mut self, world: &'a World) {
         self.receiver.try_iter().for_each(|(ident, data)| {
             log::debug!("new request found");
-            data.add_component(ident, world, &self.sender);
+            if let Err(err) = data.add_component(ident, world, &self.sender) {
+                log::error!("add component failed:{}", err);
+            }
         })
     }
 

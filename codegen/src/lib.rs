@@ -1,5 +1,4 @@
 use proc_macro::TokenStream;
-use std::collections::HashMap;
 
 use convert_case::{Case, Casing};
 use proc_macro2::{Ident, Span};
@@ -44,8 +43,6 @@ enum Error {
         "system function parameters must be one of input, component, state and resource, no more no less"
     )]
     ConflictParameterAttribute,
-    #[error("component type should not use full path name")]
-    InvalidComponentType(Span),
     #[error("only one input allowed in system")]
     MultipleInputFound,
     #[error("#[dynamic(\"lib\", \"func\")] is not allowed, use #[dynamic(lib = \"lib\", func = \"func\")] instead")]
@@ -71,7 +68,6 @@ impl Error {
             Error::InvalidKey(span) => *span,
             Error::InvalidArgument(span) => *span,
             Error::InvalidMetaForDynamic(span) => *span,
-            Error::InvalidComponentType(span) => *span,
             Error::InvalidLiteralFoundForName(span) => *span,
             Error::EntityCantBeMutable(span) => *span,
             Error::InvalidReturnType(span) => *span,
@@ -819,10 +815,6 @@ impl Sig {
         }
         Ok(attr)
     }
-
-    fn is_return_type(&self, typ: &Type) -> bool {
-        self.outputs.iter().any(|ty| typ == ty)
-    }
 }
 
 fn get_option_inner_type(path: &TypePath) -> Result<Type, Error> {
@@ -905,7 +897,7 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
                 };
                 call_names.push(name.clone());
                 match pt.ty.as_mut() {
-                    Type::Reference(r) => {
+                    Type::Reference(_) => {
                         input_names.push(quote!(#name));
                         input_types.push(pt.ty.as_ref().clone());
                     }
@@ -969,7 +961,7 @@ fn is_primitive(ty: &Type) -> bool {
 const MAX_COMPONENTS: usize = 1024;
 
 #[proc_macro_attribute]
-pub fn changeset(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn changeset(_attr: TokenStream, item: TokenStream) -> TokenStream {
     static mut COUNTER: usize = 0;
 
     let index = unsafe { COUNTER };
@@ -1001,7 +993,7 @@ pub fn changeset(attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .map(|id| format_ident!("{}_mut", id))
         .collect();
-    let indexes = (0..idents.len());
+    let indexes = 0..idents.len();
     let types: Vec<_> = input.fields.iter().map(|f| f.ty.clone()).collect();
     let types_ref: Vec<_> = types
         .iter()

@@ -252,8 +252,8 @@ impl Generator {
 
         let configs = Self::parse_config(config_dir)?;
 
-        Self::gen_messages(&configs, proto_dir.clone());
-        Self::gen_protos(proto_dir, self.request_dir.clone());
+        Self::gen_messages(&configs, proto_dir.clone())?;
+        Self::gen_protos(proto_dir, self.request_dir.clone())?;
 
         let mut cmds = Vec::new();
         let mut mods = Vec::new();
@@ -285,14 +285,12 @@ impl Generator {
         let data = quote!(
             #(#pub_ident mod #mods;)*
 
-            use crossbeam::channel::Sender;
             use ecs_engine::{
                 network::{Input, RequestIdent, ResponseSender},
-                HashComponent, NetToken, ReadOnly,
+                HashComponent, NetToken,
             };
             use protobuf::Message;
-            use specs::{error::Error, Builder, Component, Entity, HashMapStorage, World, WorldExt};
-            use std::ops::Deref;
+            use specs::{error::Error, World, WorldExt};
 
             #(pub type #names = HashComponent<#files::#names>;)*
 

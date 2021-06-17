@@ -13,20 +13,11 @@ use std::{
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
-use specs::{
-    world::Index, BitSet, Component, DefaultVecStorage, DenseVecStorage, HashMapStorage, Join,
-    NullStorage, System, VecStorage, WriteStorage,
-};
-use std::{
-    io::{Read, Write},
-    marker::PhantomData,
-    ops::DerefMut,
-};
+use specs::{Component, DenseVecStorage, HashMapStorage, Join, System, VecStorage, WriteStorage};
+use std::{marker::PhantomData, ops::DerefMut};
 
 pub use codegen::{changeset, export, system};
 use mio::Token;
-use specs::storage::UnprotectedStorage;
-
 
 pub mod config;
 pub mod network;
