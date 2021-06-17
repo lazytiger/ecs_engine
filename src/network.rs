@@ -410,10 +410,11 @@ where
     let mut begin = Instant::now();
     loop {
         poll.poll(&mut events, Some(poll_timeout))?;
+        listener.do_send();
         for event in &events {
             match event.token() {
                 LISTENER => listener.accept(&poll)?,
-                ECS_SENDER => listener.do_send(),
+                ECS_SENDER => {}
                 _ => listener.do_event(event, &poll),
             }
         }
@@ -538,12 +539,9 @@ impl ResponseSender {
         if let Err(err) = self.sender.as_ref().unwrap().send((tokens, response)) {
             log::error!("send response to network failed {}", err);
         }
-        if let Err(err) = self.waker.as_ref().unwrap().wake() {
-            log::error!("wake poll failed:{}", err);
-        }
     }
 
-    fn broadcast_data(&self, tokens: Vec<Token>, data: Vec<u8>) {
+    pub fn broadcast_data(&self, tokens: Vec<Token>, data: Vec<u8>) {
         self.broadcast(tokens, Response::Data(data));
     }
 
@@ -557,5 +555,11 @@ impl ResponseSender {
 
     pub fn send_close(&self, token: Token) {
         self.broadcast(vec![token], Response::Close);
+    }
+
+    pub fn flush(&self) {
+        if let Err(err) = self.waker.as_ref().unwrap().wake() {
+            log::error!("wake poll failed:{}", err);
+        }
     }
 }
