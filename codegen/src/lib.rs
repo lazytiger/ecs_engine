@@ -1063,8 +1063,8 @@ pub fn init_log(_attr: TokenStream, item: TokenStream) -> TokenStream {
         #input
 
         #[no_mangle]
-        extern "C" fn init_logger(param: LogParam) {
-            init(param);
+        extern "C" fn init_logger(param: ::ecs_engine::LogParam) {
+            ::ecs_engine::init_logger(param);
         }
     )
     .into()

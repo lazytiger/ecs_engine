@@ -19,7 +19,7 @@ use mio::{
     Events, Interest, Poll, Registry, Token, Waker,
 };
 use slab::Slab;
-use specs::{Entity, RunNow, World};
+use specs::{Entity, World};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -68,6 +68,7 @@ impl RequestIdent {
 pub struct Header {
     pub length: usize,
     pub cmd: u32,
+    pub closed: bool,
     //TODO more flags for expand Header
 }
 
@@ -79,6 +80,14 @@ impl Header {
     pub fn clear(&mut self) {
         self.cmd = 0;
         self.length = 0;
+    }
+
+    pub fn new(cmd: u32, length: usize) -> Self {
+        Self {
+            cmd,
+            length,
+            closed: false,
+        }
     }
 }
 
@@ -492,35 +501,6 @@ pub trait Input: Sized {
 
     #[cfg(feature = "debug")]
     fn encode(&self) -> Vec<u8>;
-}
-
-pub struct InputSystem<T> {
-    receiver: Receiver<RequestData<T>>,
-    sender: ResponseSender,
-}
-
-impl<T> InputSystem<T> {
-    pub fn new(receiver: Receiver<RequestData<T>>, sender: ResponseSender) -> InputSystem<T> {
-        Self { receiver, sender }
-    }
-}
-
-impl<'a, T> RunNow<'a> for InputSystem<T>
-where
-    T: Input + Send + Sync + 'static,
-{
-    fn run_now(&mut self, world: &'a World) {
-        self.receiver.try_iter().for_each(|(ident, data)| {
-            log::debug!("new request found");
-            if let Err(err) = data.add_component(ident, world, &self.sender) {
-                log::error!("add component failed:{}", err);
-            }
-        })
-    }
-
-    fn setup(&mut self, world: &mut World) {
-        T::setup(world);
-    }
 }
 
 #[derive(Default, Clone)]

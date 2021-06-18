@@ -286,7 +286,7 @@ impl Generator {
             #(#pub_ident mod #mods;)*
 
             use ecs_engine::{
-                network::{Input, RequestIdent, ResponseSender},
+                Input, RequestIdent, ResponseSender,
                 HashComponent, NetToken,
             };
             use protobuf::Message;
