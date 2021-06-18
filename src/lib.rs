@@ -73,9 +73,13 @@ pub struct EngineBuilder<T> {
     address: Option<SocketAddr>,
     decoder: Option<T>,
     fps: u32,
+    idle_timeout: Duration,
+    read_timeout: Duration,
+    write_timeout: Duration,
+    poll_timeout: Option<Duration>,
 }
 
-impl<T> EngineBuilder<T> {
+impl<T: Clone> EngineBuilder<T> {
     pub fn with_address(mut self, address: SocketAddr) -> Self {
         self.address.replace(address);
         self
@@ -91,6 +95,26 @@ impl<T> EngineBuilder<T> {
         self
     }
 
+    pub fn with_idle_timeout(mut self, idle_timeout: Duration) -> Self {
+        self.idle_timeout = idle_timeout;
+        self
+    }
+
+    pub fn with_read_timeout(mut self, read_timeout: Duration) -> Self {
+        self.read_timeout = read_timeout;
+        self
+    }
+
+    pub fn with_write_timeout(mut self, write_timeout: Duration) -> Self {
+        self.write_timeout = write_timeout;
+        self
+    }
+
+    pub fn with_poll_timeout(mut self, poll_timeout: Option<Duration>) -> Self {
+        self.poll_timeout = poll_timeout;
+        self
+    }
+
     pub fn build(self) -> Result<Engine<T>, BuildEngineError> {
         if self.address.is_none() {
             return Err(BuildEngineError::AddressNotSet);
@@ -98,13 +122,14 @@ impl<T> EngineBuilder<T> {
         if self.decoder.is_none() {
             return Err(BuildEngineError::DecoderNotSet);
         }
-        let address = self.address.unwrap();
-        let decoder = self.decoder.unwrap();
+        let address = self.address.clone().unwrap();
+        let decoder = self.decoder.clone().unwrap();
         let sleep = Duration::new(1, 0) / self.fps;
         Ok(Engine {
             address,
             decoder,
             sleep,
+            builder: self,
         })
     }
 }
@@ -113,6 +138,7 @@ pub struct Engine<T> {
     address: SocketAddr,
     decoder: T,
     sleep: Duration,
+    builder: EngineBuilder<T>,
 }
 
 impl<T> Engine<T>
@@ -126,6 +152,10 @@ where
             address: None,
             decoder: None,
             fps: 30,
+            idle_timeout: Duration::new(30 * 60, 0),
+            read_timeout: Duration::new(30, 0),
+            write_timeout: Duration::new(30, 0),
+            poll_timeout: None,
         }
     }
 
@@ -134,7 +164,14 @@ where
         R: Input + Send + Sync + 'static,
         S: Fn(&mut World, &mut DispatcherBuilder, &DynamicManager),
     {
-        let (receiver, sender) = async_run::<R, _, N>(self.address, self.decoder);
+        let (receiver, sender) = async_run::<R, _, N>(
+            self.address,
+            self.decoder,
+            self.builder.idle_timeout,
+            self.builder.read_timeout,
+            self.builder.write_timeout,
+            self.builder.poll_timeout,
+        );
         let mut world = World::new();
         world.insert(sender.clone());
         world.register::<NetToken>();

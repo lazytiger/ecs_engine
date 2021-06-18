@@ -125,6 +125,8 @@ where
     read_bytes: Vec<u8>,
     write_bytes: Vec<u8>,
     last_time: Instant,
+    last_read_time: Instant,
+    last_write_time: Instant,
     decoder: T,
     header: Header,
     sender: Sender<NetworkInputData>,
@@ -152,6 +154,8 @@ where
             read_bytes: Vec::with_capacity(1024),
             write_bytes: Vec::with_capacity(1024),
             last_time: Instant::now(),
+            last_read_time: Instant::now(),
+            last_write_time: Instant::now(),
             decoder,
             header: Header::default(),
             sender,
@@ -198,13 +202,13 @@ where
         }
     }
 
-    fn send(&mut self, mut data: &[u8]) {
+    fn write(&mut self, mut data: &[u8]) {
         if !self.write_bytes.is_empty() {
             self.write_bytes.extend_from_slice(data);
             return;
         }
 
-        self.last_time = Instant::now();
+        self.last_write_time = Instant::now();
         loop {
             match self.stream.write(data) {
                 Ok(size) => data = &data[size..],
@@ -239,6 +243,7 @@ where
 
     fn do_event(&mut self, event: &Event, registry: &Registry) {
         log::debug!("[{}]connection has event:{:?}", self.tag, event);
+        self.last_time = Instant::now();
         if event.is_read_closed() {
             self.shutdown();
         } else if event.is_readable() {
@@ -283,6 +288,7 @@ where
         let mut read_bytes_vec = Vec::new();
         std::mem::swap(&mut read_bytes_vec, &mut self.read_bytes);
         let mut read_bytes = read_bytes_vec.as_slice();
+        let mut new_header = false;
         loop {
             if !self.header.empty() && read_bytes.len() >= self.header.length {
                 let body: Vec<_> = read_bytes[..self.header.length].into();
@@ -292,9 +298,14 @@ where
             } else if self.header.empty() && read_bytes.len() >= N {
                 self.header = (self.decoder)(&read_bytes[..N]);
                 read_bytes = &read_bytes[N..];
+                new_header = true;
             } else {
                 break;
             }
+        }
+
+        if new_header {
+            self.last_read_time = Instant::now();
         }
 
         if read_bytes.len() == read_bytes_vec.len() {
@@ -353,15 +364,30 @@ where
     fn do_write(&mut self) {
         let mut write_bytes = Vec::new();
         std::mem::swap(&mut self.write_bytes, &mut write_bytes);
-        self.send(write_bytes.as_slice());
+        self.write(write_bytes.as_slice());
     }
 
-    fn is_timeout(&self, timeout: Duration) -> bool {
+    fn is_timeout(
+        &self,
+        idle_timeout: Duration,
+        read_timeout: Duration,
+        write_timeout: Duration,
+    ) -> bool {
         if let ConnStatus::Established = self.conn_status {
-            self.last_time.elapsed() > timeout
-        } else {
-            false
+            if self.header.length != 0 && self.last_read_time.elapsed() > read_timeout {
+                log::warn!("[{}]read timeout", self.tag);
+                return true;
+            }
+            if !self.write_bytes.is_empty() && self.last_write_time.elapsed() > write_timeout {
+                log::warn!("[{}]write timeout", self.tag);
+                return true;
+            }
+            if self.last_time.elapsed() > idle_timeout {
+                log::warn!("[{}]idle timeout", self.tag);
+                return true;
+            }
         }
+        false
     }
 
     fn close(&mut self) {
@@ -424,6 +450,9 @@ where
     sender: Sender<NetworkInputData>,
     receiver: Option<Receiver<NetworkOutputData>>,
     decoder: T,
+    idle_timeout: Duration,
+    read_timeout: Duration,
+    write_timeout: Duration,
 }
 
 impl<T, const N: usize> Listener<T, N>
@@ -437,6 +466,9 @@ where
         sender: Sender<NetworkInputData>,
         receiver: Receiver<NetworkOutputData>,
         decoder: T,
+        idle_timeout: Duration,
+        read_timeout: Duration,
+        write_timeout: Duration,
     ) -> Self {
         Self {
             listener,
@@ -444,6 +476,9 @@ where
             sender,
             receiver: Some(receiver),
             decoder,
+            idle_timeout,
+            read_timeout,
+            write_timeout,
         }
     }
 
@@ -487,7 +522,7 @@ where
             for token in tokens {
                 if let Some(conn) = self.conns.get_mut(token.0) {
                     match &data {
-                        Response::Data(data) => conn.send(data.as_slice()),
+                        Response::Data(data) => conn.write(data.as_slice()),
                         Response::Entity(entity) => conn.set_entity(*entity),
                         Response::Close(done) => {
                             if *done {
@@ -505,10 +540,13 @@ where
         self.receiver.replace(receiver);
     }
 
-    pub fn check_timeout(&mut self, timeout: Duration) {
+    pub fn check_timeout(&mut self) {
+        let idle_timeout = self.idle_timeout;
+        let read_timeout = self.read_timeout;
+        let write_timeout = self.write_timeout;
         self.conns
             .iter_mut()
-            .filter(|(_, conn)| conn.is_timeout(timeout))
+            .filter(|(_, conn)| conn.is_timeout(idle_timeout, read_timeout, write_timeout))
             .for_each(|(_, conn)| conn.shutdown());
     }
 
@@ -535,6 +573,10 @@ pub fn run_network<D, const N: usize>(
     sender: Sender<NetworkInputData>,
     receiver: Receiver<NetworkOutputData>,
     decoder: D,
+    idle_timeout: Duration,
+    read_timeout: Duration,
+    write_timeout: Duration,
+    poll_timeout: Option<Duration>,
 ) -> Result<()>
 where
     D: HeaderFn,
@@ -543,13 +585,21 @@ where
     let mut listener = TcpListener::bind(address)?;
     poll.registry()
         .register(&mut listener, LISTENER, Interest::READABLE)?;
-    let mut listener: Listener<_, N> = Listener::new(listener, 4096, sender, receiver, decoder);
+    let mut listener: Listener<_, N> = Listener::new(
+        listener,
+        4096,
+        sender,
+        receiver,
+        decoder,
+        idle_timeout,
+        read_timeout,
+        write_timeout,
+    );
     let mut events = Events::with_capacity(1024);
-    let poll_timeout = Duration::new(1, 0);
-    let read_write_timeout = Duration::new(30, 0);
-    let mut begin = Instant::now();
+    let mut last_check_time = Instant::now();
+    let check_timeout = Duration::new(1, 0);
     loop {
-        poll.poll(&mut events, Some(poll_timeout))?;
+        poll.poll(&mut events, poll_timeout)?;
         let registry = poll.registry();
         listener.do_send();
         for event in &events {
@@ -559,10 +609,10 @@ where
                 _ => listener.do_event(event, &poll),
             }
         }
-        if begin.elapsed() >= poll_timeout {
-            begin = Instant::now();
+        if last_check_time.elapsed() >= check_timeout {
+            last_check_time = Instant::now();
             listener.check_release();
-            listener.check_timeout(read_write_timeout);
+            listener.check_timeout();
         }
     }
 }
@@ -570,6 +620,10 @@ where
 pub fn async_run<T, D, const N: usize>(
     address: SocketAddr,
     decoder: D,
+    idle_timeout: Duration,
+    read_timeout: Duration,
+    write_timeout: Duration,
+    poll_timeout: Option<Duration>,
 ) -> (Receiver<RequestData<T>>, ResponseSender)
 where
     T: Send + Input + 'static,
@@ -586,9 +640,17 @@ where
     let poll = Poll::new().unwrap();
     let waker = Arc::new(Waker::new(poll.registry(), ECS_SENDER).unwrap());
     rayon::spawn(move || {
-        if let Err(err) =
-            run_network::<_, N>(poll, address, network_sender, response_receiver, decoder)
-        {
+        if let Err(err) = run_network::<_, N>(
+            poll,
+            address,
+            network_sender,
+            response_receiver,
+            decoder,
+            idle_timeout,
+            read_timeout,
+            write_timeout,
+            poll_timeout,
+        ) {
             log::error!("network thread quit with error:{}", err);
         }
     });
