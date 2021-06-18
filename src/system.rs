@@ -1,6 +1,7 @@
 use crate::{
-    network::{Input, RequestData, ResponseSender},
+    network::{RequestData, ResponseSender},
     sync::Changeset,
+    Input,
 };
 use crossbeam::channel::Receiver;
 use specs::{Component, Join, RunNow, System, World, WriteStorage};

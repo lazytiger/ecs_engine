@@ -13,13 +13,14 @@ use crossbeam::channel::unbounded as channel;
 
 pub trait HeaderFn = Fn(&[u8]) -> Header;
 
+use crate::Input;
 use mio::{
     event::Event,
     net::{TcpListener, TcpStream},
     Events, Interest, Poll, Registry, Token, Waker,
 };
 use slab::Slab;
-use specs::{Entity, World};
+use specs::Entity;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -480,27 +481,6 @@ where
             }
         }
     })
-}
-
-/// Trait for requests enum type, it's an aggregation of all requests
-pub trait Input: Sized {
-    /// Match the actual type contains in enum, and add it to world.
-    /// If entity is none and current type is Login, a new entity will be created.
-    fn add_component(
-        self,
-        ident: RequestIdent,
-        world: &World,
-        sender: &ResponseSender,
-    ) -> std::result::Result<(), specs::error::Error>;
-
-    /// Register all the actual types as components
-    fn setup(world: &mut World);
-
-    /// Decode actual type as header specified.
-    fn decode(cmd: u32, data: &[u8]) -> Option<Self>;
-
-    #[cfg(feature = "debug")]
-    fn encode(&self) -> Vec<u8>;
 }
 
 #[derive(Default, Clone)]

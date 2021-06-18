@@ -20,13 +20,34 @@ pub use component::{HashComponent, NetToken};
 pub use config::Generator;
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
-pub use network::{Header, Input, RequestIdent, ResponseSender};
+pub use network::{Header, RequestIdent, ResponseSender};
 pub use sync::Changeset;
 
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
+
+/// Trait for requests enum type, it's an aggregation of all requests
+pub trait Input: Sized {
+    /// Match the actual type contains in enum, and add it to world.
+    /// If entity is none and current type is Login, a new entity will be created.
+    fn add_component(
+        self,
+        ident: RequestIdent,
+        world: &World,
+        sender: &ResponseSender,
+    ) -> std::result::Result<(), specs::error::Error>;
+
+    /// Register all the actual types as components
+    fn setup(world: &mut World);
+
+    /// Decode actual type as header specified.
+    fn decode(cmd: u32, data: &[u8]) -> Option<Self>;
+
+    #[cfg(feature = "debug")]
+    fn encode(&self) -> Vec<u8>;
+}
 
 /// 只读封装，如果某个变量从根本上不希望进行修改，则可以使用此模板类型
 pub struct ReadOnly<T> {
