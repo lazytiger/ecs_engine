@@ -1,10 +1,14 @@
 use crate::{
+    component::Closing,
     network::{RequestData, ResponseSender},
     sync::Changeset,
-    Input,
+    Input, NetToken,
 };
 use crossbeam::channel::Receiver;
-use specs::{Component, Join, RunNow, System, World, WriteStorage};
+use specs::{
+    shred::DynamicSystemData, Component, Entities, Join, LazyUpdate, Read, ReadStorage, RunNow,
+    System, World, WorldExt, WriteStorage,
+};
 use std::marker::PhantomData;
 
 pub struct CommitChangeSystem<T> {
@@ -82,5 +86,34 @@ where
 
     fn setup(&mut self, world: &mut World) {
         T::setup(world);
+    }
+}
+
+pub struct CloseSystem;
+
+impl<'a> System<'a> for CloseSystem {
+    type SystemData = (
+        Entities<'a>,
+        ReadStorage<'a, Closing>,
+        ReadStorage<'a, NetToken>,
+        Read<'a, LazyUpdate>,
+    );
+
+    fn run(&mut self, (entities, closing, tokens, lazy_update): Self::SystemData) {
+        let (entities, tokens): (Vec<_>, Vec<_>) = (&entities, &tokens, &closing)
+            .join()
+            .map(|(entity, token, _)| (entity, token.token()))
+            .unzip();
+        lazy_update.exec_mut(move |world| {
+            if let Err(err) = world.delete_entities(entities.as_slice()) {
+                log::error!("delete entities failed:{}", err);
+            }
+            let sender = world.read_resource::<ResponseSender>();
+            sender.broadcast_close(tokens);
+        });
+    }
+
+    fn setup(&mut self, world: &mut World) {
+        world.register::<Closing>();
     }
 }

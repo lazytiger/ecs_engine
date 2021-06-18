@@ -285,10 +285,7 @@ impl Generator {
         let data = quote!(
             #(#pub_ident mod #mods;)*
 
-            use ecs_engine::{
-                Input, RequestIdent, ResponseSender,
-                HashComponent, NetToken,
-            };
+            use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender};
             use protobuf::Message;
             use specs::{error::Error, World, WorldExt};
 
@@ -300,14 +297,18 @@ impl Generator {
 
             impl Input for Request {
                 fn add_component(self, ident: RequestIdent, world: &World, sender: &ResponseSender) ->Result<(), Error> {
-                    let entity = if ident.is_token() {
-                        let token = ident.token();
-                        let entity = world.entities().create();
-                        world.write_component::<NetToken>().insert(entity, NetToken::new(token)).map(|_|())?;
-                        sender.send_entity(token, entity);
-                        entity
-                    } else {
-                        ident.entity()
+                    let entity = match ident {
+                        RequestIdent::Token(token) => {
+                            let entity = world.entities().create();
+                            world.write_component::<NetToken>().insert(entity, NetToken::new(token)).map(|_|())?;
+                            sender.send_entity(token, entity);
+                            entity
+                        },
+                        RequestIdent::Close(entity) => {
+                            world.write_component::<Closing>().insert(entity, Closing).map(|_|())?;
+                            return Ok(());
+                        }
+                        RequestIdent::Entity(entity) => entity,
                     };
 
                     match self {
@@ -328,6 +329,7 @@ impl Generator {
                                 Some(Request::#names(#names::new(data)))
                             },
                     )*
+                        0 => None,
                         _ => {
                             log::error!("invalid cmd:{}", cmd);
                             None

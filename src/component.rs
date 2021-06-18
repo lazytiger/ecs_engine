@@ -1,6 +1,12 @@
 use mio::Token;
-use specs::{Component, DenseVecStorage, HashMapStorage, VecStorage};
-use std::ops::{Deref, DerefMut};
+use specs::{
+    storage::UnprotectedStorage, Component, DenseVecStorage, HashMapStorage, NullStorage,
+    VecStorage,
+};
+use std::{
+    any::Any,
+    ops::{Deref, DerefMut},
+};
 
 macro_rules! component {
     ($storage:ident, $name:ident) => {
@@ -46,4 +52,11 @@ impl NetToken {
     pub fn token(&self) -> Token {
         self.data
     }
+}
+
+#[derive(Default)]
+pub struct Closing;
+
+impl Component for Closing {
+    type Storage = NullStorage<Self>;
 }

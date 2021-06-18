@@ -16,13 +16,14 @@ use specs::{DispatcherBuilder, World, WorldExt};
 use std::{thread::sleep, time::Duration};
 
 pub use codegen::{changeset, export, init_log, system};
-pub use component::{HashComponent, NetToken};
+pub use component::{Closing, HashComponent, NetToken};
 pub use config::Generator;
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
 pub use network::{Header, RequestIdent, ResponseSender};
 pub use sync::Changeset;
 
+use crate::system::CloseSystem;
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
@@ -141,6 +142,7 @@ where
         let dm = DynamicManager::default();
         let mut builder = DispatcherBuilder::new();
         builder.add_thread_local(InputSystem::new(receiver, sender.clone()));
+        builder.add(CloseSystem, "close", &[]);
         setup(&mut world, &mut builder, &dm);
 
         world.insert(dm);

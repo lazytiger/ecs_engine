@@ -1,19 +1,15 @@
 use std::{
     io::{ErrorKind, Read, Result, Write},
     net::{Shutdown, SocketAddr},
+    sync::Arc,
     time::{Duration, Instant},
 };
-
-use crossbeam::channel::{Receiver, Sender};
 
 #[cfg(feature = "bounded")]
 use crossbeam::channel::bounded as channel;
 #[cfg(not(feature = "bounded"))]
 use crossbeam::channel::unbounded as channel;
-
-pub trait HeaderFn = Fn(&[u8]) -> Header;
-
-use crate::Input;
+use crossbeam::channel::{Receiver, Sender};
 use mio::{
     event::Event,
     net::{TcpListener, TcpStream},
@@ -21,26 +17,30 @@ use mio::{
 };
 use slab::Slab;
 use specs::Entity;
-use std::sync::Arc;
+
+use crate::Input;
+
+pub trait HeaderFn = Fn(&[u8]) -> Header;
 
 #[derive(Clone)]
 pub enum RequestIdent {
     Entity(Entity),
+    Close(Entity),
     Token(Token),
 }
 
 impl RequestIdent {
     pub fn token(self) -> Token {
         match self {
-            RequestIdent::Entity(_) => panic!("entity stored instead of token"),
             RequestIdent::Token(token) => token,
+            _ => panic!("not a token RequestIdent"),
         }
     }
 
     pub fn entity(self) -> Entity {
         match self {
             RequestIdent::Entity(entity) => entity,
-            RequestIdent::Token(_) => panic!("token stored instead of entity"),
+            _ => panic!("not a entity RequestIdent"),
         }
     }
 
@@ -48,20 +48,24 @@ impl RequestIdent {
         *self = RequestIdent::Entity(entity);
     }
 
+    pub fn replace_close(&mut self) {
+        if let RequestIdent::Entity(entity) = self {
+            *self = RequestIdent::Close(*entity);
+        } else {
+            panic!("not a entity RequestIdent");
+        }
+    }
+
     pub fn replace_token(&mut self, token: Token) {
         *self = RequestIdent::Token(token);
     }
 
     pub fn is_entity(&self) -> bool {
-        if let RequestIdent::Entity(_) = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, RequestIdent::Entity(_))
     }
 
     pub fn is_token(&self) -> bool {
-        !self.is_entity()
+        matches!(self, RequestIdent::Token(_))
     }
 }
 
@@ -69,8 +73,6 @@ impl RequestIdent {
 pub struct Header {
     pub length: usize,
     pub cmd: u32,
-    pub closed: bool,
-    //TODO more flags for expand Header
 }
 
 impl Header {
@@ -84,12 +86,32 @@ impl Header {
     }
 
     pub fn new(cmd: u32, length: usize) -> Self {
-        Self {
-            cmd,
-            length,
-            closed: false,
-        }
+        Self { cmd, length }
     }
+}
+
+#[derive(Debug)]
+enum ConnStatus {
+    /// 连接建立，可以正常进行读写，此时如果断开连接，则直接到Closed
+    Established,
+    /// 网络连接已经关闭
+    Closed,
+    /// 注册已经清除
+    Deregistered,
+}
+
+#[derive(Debug)]
+enum EcsStatus {
+    /// 网络连接建立，正在初始化中，还未收到初始请求
+    Initializing,
+    /// 收到初始请求，并将Token发送到ECS
+    TokenSent,
+    /// 收到ECS响应Token，可以正常工作了
+    EntityReceived,
+    /// 网络出现问题，已经发送Close请求到ecs，等待确认
+    CloseSent,
+    /// Ecs确认清理已经完成，可以清理资源
+    CloseConfirmed,
 }
 
 struct Connection<T, const N: usize>
@@ -107,6 +129,8 @@ where
     header: Header,
     sender: Sender<NetworkInputData>,
     ident: RequestIdent,
+    conn_status: ConnStatus,
+    ecs_status: EcsStatus,
 }
 
 impl<T, const N: usize> Connection<T, N>
@@ -115,11 +139,11 @@ where
 {
     pub fn new(
         stream: TcpStream,
-        addr: SocketAddr,
+        address: SocketAddr,
         decoder: T,
         sender: Sender<NetworkInputData>,
     ) -> Self {
-        let tag = addr.to_string();
+        let tag = address.to_string();
         Self {
             stream,
             tag,
@@ -132,6 +156,8 @@ where
             header: Header::default(),
             sender,
             ident: RequestIdent::Token(Token(0)),
+            conn_status: ConnStatus::Established,
+            ecs_status: EcsStatus::Initializing,
         }
     }
 
@@ -142,17 +168,32 @@ where
     }
 
     fn reregister(&mut self, registry: &Registry) {
-        let mut modified = false;
-        if !self.write_bytes.is_empty() && !self.interests.is_writable() {
-            modified = true;
-            self.interests |= Interest::WRITABLE;
-        } else if self.write_bytes.is_empty() && self.interests.is_writable() {
-            modified = true;
-            self.interests = Interest::READABLE;
-        }
-        if modified {
-            if let Err(err) = registry.reregister(&mut self.stream, self.token, self.interests) {
-                log::error!("[{}]reregister failed {}", self.tag, err);
+        match self.conn_status {
+            ConnStatus::Established => {
+                let mut modified = false;
+                if !self.write_bytes.is_empty() && !self.interests.is_writable() {
+                    modified = true;
+                    self.interests |= Interest::WRITABLE;
+                } else if self.write_bytes.is_empty() && self.interests.is_writable() {
+                    modified = true;
+                    self.interests = Interest::READABLE;
+                }
+                if modified {
+                    if let Err(err) =
+                        registry.reregister(&mut self.stream, self.token, self.interests)
+                    {
+                        log::error!("[{}]reregister failed {}", self.tag, err);
+                    }
+                }
+            }
+            ConnStatus::Closed => {
+                if let Err(err) = registry.deregister(&mut self.stream) {
+                    log::error!("[{}]connection deregister failed{}", self.tag, err);
+                }
+                self.conn_status = ConnStatus::Deregistered;
+            }
+            ConnStatus::Deregistered => {
+                log::warn!("[{}]connection got event after deregister", self.tag)
             }
         }
     }
@@ -173,21 +214,38 @@ where
                 }
                 Err(err) => {
                     log::error!("[{}]write failed {}", self.tag, err);
-                    //TODO status
+                    self.shutdown();
                     return;
                 }
             }
         }
     }
 
+    fn shutdown(&mut self) {
+        if let ConnStatus::Established = self.conn_status {
+            if let Err(err) = self.stream.shutdown(Shutdown::Both) {
+                log::error!("[{}]close failed {}", self.tag, err);
+            }
+            self.conn_status = ConnStatus::Closed;
+            self.read_bytes.clear();
+            self.write_bytes.clear();
+            self.header.clear();
+            self.send_close();
+        } else {
+            log::debug!("[{}]connection already closed", self.tag);
+        }
+    }
+
     fn do_event(&mut self, event: &Event, registry: &Registry) {
         log::debug!("[{}]connection has event:{:?}", self.tag, event);
         if event.is_read_closed() {
+            self.shutdown();
         } else if event.is_readable() {
             self.do_read();
         }
 
         if event.is_write_closed() {
+            self.shutdown();
         } else if event.is_writable() {
             self.do_write();
         }
@@ -202,13 +260,13 @@ where
                 Ok(size) if size > 0 => self.read_bytes.extend_from_slice(&bytes[..size]),
                 Ok(_) => {
                     log::error!("[{}]read zero byte, connection closed", self.tag);
-                    //TODO status
+                    self.shutdown();
                     return;
                 }
                 Err(err) if err.kind() == ErrorKind::WouldBlock => break,
                 Err(err) => {
                     log::error!("[{}]read failed {}", self.tag, err);
-                    //TODO status
+                    self.shutdown();
                     return;
                 }
             }
@@ -221,18 +279,14 @@ where
             return;
         }
 
-        let mut read_bytes = self.read_bytes.as_slice();
+        let mut read_bytes_vec = Vec::new();
+        std::mem::swap(&mut read_bytes_vec, &mut self.read_bytes);
+        let mut read_bytes = read_bytes_vec.as_slice();
         loop {
             if !self.header.empty() && read_bytes.len() >= self.header.length {
                 let body: Vec<_> = read_bytes[..self.header.length].into();
                 read_bytes = &read_bytes[self.header.length..];
-                if let Err(err) = self
-                    .sender
-                    .send((self.ident.clone(), self.header.clone(), body))
-                {
-                    log::error!("send data to ecs failed:{}", err);
-                    //todo close
-                }
+                self.send_ecs(body);
                 self.header.clear();
             } else if self.header.empty() && read_bytes.len() >= N {
                 self.header = (self.decoder)(&read_bytes[..N]);
@@ -242,8 +296,47 @@ where
             }
         }
 
-        if read_bytes.len() != self.read_bytes.len() {
-            self.read_bytes = read_bytes.into();
+        if read_bytes.len() == read_bytes_vec.len() {
+            std::mem::swap(&mut read_bytes_vec, &mut self.read_bytes);
+        } else {
+            self.read_bytes.extend_from_slice(read_bytes);
+        }
+    }
+
+    fn send_ecs(&mut self, data: Vec<u8>) {
+        match self.ecs_status {
+            EcsStatus::Initializing => self.ecs_status = EcsStatus::TokenSent,
+            EcsStatus::TokenSent => {
+                log::error!(
+                    "[{}]another request found while entity not received, dropped",
+                    self.tag
+                );
+                return;
+            }
+            EcsStatus::EntityReceived => {}
+            _ => {
+                log::error!("[{}]close sent to ecs, should not send more data", self.tag);
+                return;
+            }
+        }
+        if let Err(err) = self
+            .sender
+            .send((self.ident.clone(), self.header.clone(), data))
+        {
+            log::error!("[{}]send data to ecs failed:{}", self.tag, err);
+        }
+    }
+
+    fn send_close(&mut self) {
+        if let EcsStatus::EntityReceived = self.ecs_status {
+            self.ident.replace_close();
+            self.send_ecs(Vec::new());
+            self.ecs_status = EcsStatus::CloseSent;
+        } else {
+            log::info!(
+                "[{}]connection has not received entity, close later",
+                self.tag
+            );
         }
     }
 
@@ -254,18 +347,28 @@ where
     }
 
     fn is_timeout(&self, timeout: Duration) -> bool {
-        self.last_time.elapsed() > timeout
-    }
-
-    fn close(&mut self) {
-        if let Err(err) = self.stream.shutdown(Shutdown::Both) {
-            log::error!("[{}]close failed {}", self.tag, err);
+        if let ConnStatus::Established = self.conn_status {
+            self.last_time.elapsed() > timeout
+        } else {
+            false
         }
     }
 
-    fn closed(&self) -> bool {
-        //TODO
-        false
+    fn close(&mut self) {
+        match self.ecs_status {
+            EcsStatus::CloseSent => {
+                self.ecs_status = EcsStatus::CloseConfirmed;
+            }
+            _ => log::error!(
+                "[{}]connection received CloseConfirmed while in status:{:?}",
+                self.tag,
+                self.ecs_status
+            ),
+        }
+    }
+
+    fn releasable(&self) -> bool {
+        matches!(self.ecs_status, EcsStatus::CloseConfirmed)
     }
 
     fn set_token(&mut self, token: Token) {
@@ -275,18 +378,26 @@ where
 
     fn set_entity(&mut self, entity: Entity) {
         log::debug!("[{}]got entity:{:?}", self.tag, entity);
-        if self.ident.is_entity() {
-            log::error!("entity already set for connection:{}", self.tag);
-            return;
+        if let EcsStatus::TokenSent = self.ecs_status {
+            self.ident.replace_entity(entity);
+            self.ecs_status = EcsStatus::EntityReceived;
+            if !matches!(self.conn_status, ConnStatus::Established) {
+                self.send_close();
+            }
+        } else {
+            log::error!(
+                "[{}]connection got entity while in status:{:?}",
+                self.tag,
+                self.ecs_status
+            );
         }
-        self.ident.replace_entity(entity);
     }
 }
 
 pub enum Response {
     Entity(Entity),
     Data(Vec<u8>),
-    Close,
+    Close(bool),
 }
 
 pub type NetworkInputData = (RequestIdent, Header, Vec<u8>);
@@ -325,7 +436,7 @@ where
         }
     }
 
-    pub fn accept(&mut self, poll: &Poll) -> Result<()> {
+    pub fn accept(&mut self, registry: &Registry) -> Result<()> {
         loop {
             match self.listener.accept() {
                 Err(err) if err.kind() == ErrorKind::WouldBlock => {
@@ -337,17 +448,17 @@ where
                     log::info!("accept connection:{}", addr);
                     let conn =
                         Connection::new(stream, addr, self.decoder.clone(), self.sender.clone());
-                    self.insert(conn, poll);
+                    self.insert(registry, conn);
                 }
             }
         }
     }
 
-    fn insert(&mut self, conn: Connection<T, N>, poll: &Poll) {
+    fn insert(&mut self, registry: &Registry, conn: Connection<T, N>) {
         let index = self.conns.insert(conn);
         let conn = self.conns.get_mut(index).unwrap();
         conn.set_token(Token(index));
-        conn.setup(poll.registry());
+        conn.setup(registry);
     }
 
     pub fn do_event(&mut self, event: &Event, poll: &Poll) {
@@ -358,7 +469,7 @@ where
         }
     }
 
-    pub fn do_send(&mut self) {
+    pub fn do_send(&mut self, registry: &Registry) {
         let receiver = self.receiver.take().unwrap();
         receiver.try_iter().for_each(|(tokens, data)| {
             for token in tokens {
@@ -366,7 +477,13 @@ where
                     match &data {
                         Response::Data(data) => conn.send(data.as_slice()),
                         Response::Entity(entity) => conn.set_entity(*entity),
-                        Response::Close => conn.close(),
+                        Response::Close(done) => {
+                            if *done {
+                                conn.close()
+                            } else {
+                                conn.shutdown();
+                            }
+                        }
                     }
                 } else {
                     log::error!("connection:{} not found", token.0);
@@ -376,18 +493,18 @@ where
         self.receiver.replace(receiver);
     }
 
-    pub fn check_timeout(&mut self, timeout: Duration) {
+    pub fn check_timeout(&mut self, registry: &Registry, timeout: Duration) {
         self.conns
             .iter_mut()
             .filter(|(_, conn)| conn.is_timeout(timeout))
-            .for_each(|(_, conn)| conn.close());
+            .for_each(|(_, conn)| conn.shutdown());
     }
 
-    pub fn check_close(&mut self) {
+    pub fn check_release(&mut self) {
         let indexes: Vec<_> = self
             .conns
             .iter()
-            .filter(|(_, conn)| (*conn).closed())
+            .filter(|(_, conn)| (*conn).releasable())
             .map(|(index, _)| index)
             .collect();
         indexes.iter().for_each(|index| {
@@ -420,24 +537,25 @@ where
     let mut begin = Instant::now();
     loop {
         poll.poll(&mut events, Some(poll_timeout))?;
-        listener.do_send();
+        let registry = poll.registry();
+        listener.do_send(registry);
         for event in &events {
             match event.token() {
-                LISTENER => listener.accept(&poll)?,
+                LISTENER => listener.accept(registry)?,
                 ECS_SENDER => {}
                 _ => listener.do_event(event, &poll),
             }
         }
         if begin.elapsed() >= poll_timeout {
             begin = Instant::now();
-            listener.check_close();
-            listener.check_timeout(read_write_timeout);
+            listener.check_release();
+            listener.check_timeout(registry, read_write_timeout);
         }
     }
 }
 
 pub fn async_run<T, D, const N: usize>(
-    addr: SocketAddr,
+    address: SocketAddr,
     decoder: D,
 ) -> (Receiver<RequestData<T>>, ResponseSender)
 where
@@ -456,7 +574,7 @@ where
     let waker = Arc::new(Waker::new(poll.registry(), ECS_SENDER).unwrap());
     rayon::spawn(move || {
         if let Err(err) =
-            run_network::<_, N>(poll, addr, network_sender, response_receiver, decoder)
+            run_network::<_, N>(poll, address, network_sender, response_receiver, decoder)
         {
             log::error!("network thread quit with error:{}", err);
         }
@@ -507,6 +625,10 @@ impl ResponseSender {
         self.broadcast(tokens, Response::Data(data));
     }
 
+    pub fn broadcast_close(&self, tokens: Vec<Token>) {
+        self.broadcast(tokens, Response::Close(true));
+    }
+
     pub fn send_data(&self, token: Token, data: Vec<u8>) {
         self.broadcast(vec![token], Response::Data(data));
     }
@@ -515,8 +637,8 @@ impl ResponseSender {
         self.broadcast(vec![token], Response::Entity(entity));
     }
 
-    pub fn send_close(&self, token: Token) {
-        self.broadcast(vec![token], Response::Close);
+    pub fn send_close(&self, token: Token, done: bool) {
+        self.broadcast(vec![token], Response::Close(done));
     }
 
     pub fn flush(&self) {
