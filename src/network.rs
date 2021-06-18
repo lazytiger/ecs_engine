@@ -231,6 +231,7 @@ where
             self.write_bytes.clear();
             self.header.clear();
             self.send_close();
+            log::info!("[{}]connection closed now", self.tag);
         } else {
             log::debug!("[{}]connection already closed", self.tag);
         }
@@ -328,16 +329,25 @@ where
     }
 
     fn send_close(&mut self) {
-        if let EcsStatus::EntityReceived = self.ecs_status {
-            self.ident.replace_close();
-            self.send_ecs(Vec::new());
-            self.ecs_status = EcsStatus::CloseSent;
-        } else {
-            log::info!(
+        match self.ecs_status {
+            EcsStatus::EntityReceived => {
+                self.ident.replace_close();
+                self.send_ecs(Vec::new());
+                self.ecs_status = EcsStatus::CloseSent;
+                log::info!("[{}]connection send close to ecs", self.tag);
+            }
+            EcsStatus::Initializing => {
+                self.ecs_status = EcsStatus::CloseConfirmed;
+                log::info!(
+                    "[{}]connection is initializing, close confirm now",
+                    self.tag
+                );
+            }
+            _ => log::info!(
                 "[{}]connection has not received entity, close later",
                 self.tag
-            );
-        }
+            ),
+        };
     }
 
     fn do_write(&mut self) {
@@ -357,6 +367,7 @@ where
     fn close(&mut self) {
         match self.ecs_status {
             EcsStatus::CloseSent => {
+                log::info!("[{}]ecs confirm closed, it's ok to release now", self.tag);
                 self.ecs_status = EcsStatus::CloseConfirmed;
             }
             _ => log::error!(
@@ -459,6 +470,7 @@ where
         let conn = self.conns.get_mut(index).unwrap();
         conn.set_token(Token(index));
         conn.setup(registry);
+        log::info!("connection:{} installed", index);
     }
 
     pub fn do_event(&mut self, event: &Event, poll: &Poll) {
@@ -469,7 +481,7 @@ where
         }
     }
 
-    pub fn do_send(&mut self, registry: &Registry) {
+    pub fn do_send(&mut self) {
         let receiver = self.receiver.take().unwrap();
         receiver.try_iter().for_each(|(tokens, data)| {
             for token in tokens {
@@ -493,7 +505,7 @@ where
         self.receiver.replace(receiver);
     }
 
-    pub fn check_timeout(&mut self, registry: &Registry, timeout: Duration) {
+    pub fn check_timeout(&mut self, timeout: Duration) {
         self.conns
             .iter_mut()
             .filter(|(_, conn)| conn.is_timeout(timeout))
@@ -509,6 +521,7 @@ where
             .collect();
         indexes.iter().for_each(|index| {
             self.conns.remove(*index);
+            log::info!("connection:{} released now", index);
         });
     }
 }
@@ -538,7 +551,7 @@ where
     loop {
         poll.poll(&mut events, Some(poll_timeout))?;
         let registry = poll.registry();
-        listener.do_send(registry);
+        listener.do_send();
         for event in &events {
             match event.token() {
                 LISTENER => listener.accept(registry)?,
@@ -549,7 +562,7 @@ where
         if begin.elapsed() >= poll_timeout {
             begin = Instant::now();
             listener.check_release();
-            listener.check_timeout(registry, read_write_timeout);
+            listener.check_timeout(read_write_timeout);
         }
     }
 }

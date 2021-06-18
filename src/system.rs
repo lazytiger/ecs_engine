@@ -6,8 +6,8 @@ use crate::{
 };
 use crossbeam::channel::Receiver;
 use specs::{
-    shred::DynamicSystemData, Component, Entities, Join, LazyUpdate, Read, ReadStorage, RunNow,
-    System, World, WorldExt, WriteStorage,
+    Component, Entities, Join, LazyUpdate, Read, ReadStorage, RunNow, System, World, WorldExt,
+    WriteStorage,
 };
 use std::marker::PhantomData;
 
@@ -104,12 +104,18 @@ impl<'a> System<'a> for CloseSystem {
             .join()
             .map(|(entity, token, _)| (entity, token.token()))
             .unzip();
+        if entities.is_empty() {
+            return;
+        }
+
         lazy_update.exec_mut(move |world| {
             if let Err(err) = world.delete_entities(entities.as_slice()) {
                 log::error!("delete entities failed:{}", err);
             }
-            let sender = world.read_resource::<ResponseSender>();
-            sender.broadcast_close(tokens);
+            log::info!("entities:{:?} deleted", entities);
+            world
+                .read_resource::<ResponseSender>()
+                .broadcast_close(tokens);
         });
     }
 

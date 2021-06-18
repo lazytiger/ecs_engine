@@ -1,12 +1,6 @@
 use mio::Token;
-use specs::{
-    storage::UnprotectedStorage, Component, DenseVecStorage, HashMapStorage, NullStorage,
-    VecStorage,
-};
-use std::{
-    any::Any,
-    ops::{Deref, DerefMut},
-};
+use specs::{Component, DenseVecStorage, HashMapStorage, NullStorage, VecStorage};
+use std::ops::{Deref, DerefMut};
 
 macro_rules! component {
     ($storage:ident, $name:ident) => {

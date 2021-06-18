@@ -293,6 +293,7 @@ impl Generator {
 
             pub enum Request {
                 #(#names(#names),)*
+                None,
             }
 
             impl Input for Request {
@@ -313,6 +314,7 @@ impl Generator {
 
                     match self {
                         #(Request::#names(c) => world.write_component::<#names>().insert(entity, c).map(|_|()),)*
+                        Request::None => Ok(()),
                     }
                 }
 
@@ -329,7 +331,7 @@ impl Generator {
                                 Some(Request::#names(#names::new(data)))
                             },
                     )*
-                        0 => None,
+                        0 => Some(Request::None),
                         _ => {
                             log::error!("invalid cmd:{}", cmd);
                             None
@@ -347,6 +349,7 @@ impl Generator {
                                 #cmds
                             },
                         )*
+                        Request::None => 0,
                     };
                     unsafe {
                         let header:[u8; 8]  = std::mem::transmute(((data.len() - 8) as u32,  cmd as u32));
