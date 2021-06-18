@@ -503,16 +503,24 @@ where
     fn insert(&mut self, registry: &Registry, conn: Connection<T, N>) {
         let index = self.conns.insert(conn);
         let conn = self.conns.get_mut(index).unwrap();
-        conn.set_token(Token(index));
+        conn.set_token(Self::index2token(index));
         conn.setup(registry);
         log::info!("connection:{} installed", index);
     }
 
+    fn token2index(token: Token) -> usize {
+        token.0 - MIN_CLIENT
+    }
+
+    fn index2token(index: usize) -> Token {
+        Token(index + MIN_CLIENT)
+    }
+
     pub fn do_event(&mut self, event: &Event, poll: &Poll) {
-        if let Some(conn) = self.conns.get_mut(event.token().0) {
+        if let Some(conn) = self.conns.get_mut(Self::token2index(event.token())) {
             conn.do_event(event, poll.registry());
         } else {
-            log::error!("connection:{} not found", event.token().0);
+            log::error!("connection:{} not found", Self::token2index(event.token()));
         }
     }
 
@@ -520,7 +528,7 @@ where
         let receiver = self.receiver.take().unwrap();
         receiver.try_iter().for_each(|(tokens, data)| {
             for token in tokens {
-                if let Some(conn) = self.conns.get_mut(token.0) {
+                if let Some(conn) = self.conns.get_mut(Self::token2index(token)) {
                     match &data {
                         Response::Data(data) => conn.write(data.as_slice()),
                         Response::Entity(entity) => conn.set_entity(*entity),
@@ -533,7 +541,7 @@ where
                         }
                     }
                 } else {
-                    log::error!("connection:{} not found", token.0);
+                    log::error!("connection:{} not found", Self::token2index(token));
                 }
             }
         });
@@ -566,6 +574,7 @@ where
 
 const LISTENER: Token = Token(1);
 const ECS_SENDER: Token = Token(2);
+const MIN_CLIENT: usize = 3;
 
 pub fn run_network<D, const N: usize>(
     mut poll: Poll,
