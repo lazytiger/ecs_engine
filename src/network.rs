@@ -325,7 +325,13 @@ where
                 );
                 return;
             }
-            EcsStatus::EntityReceived => {}
+            EcsStatus::EntityReceived => {
+                if self.header.cmd == 0 {
+                    log::error!("[{}]invalid request cmd 0 found, close now", self.tag);
+                    self.shutdown();
+                    return;
+                }
+            }
             _ => {
                 log::error!("[{}]close sent to ecs, should not send more data", self.tag);
                 return;
@@ -438,7 +444,7 @@ pub enum Response {
 }
 
 pub type NetworkInputData = (RequestIdent, Header, Vec<u8>);
-pub type RequestData<T> = (RequestIdent, T);
+pub type RequestData<T> = (RequestIdent, Option<T>);
 pub type NetworkOutputData = (Vec<Token>, Response);
 
 struct Listener<T, const N: usize>
@@ -677,10 +683,9 @@ where
     T: Input,
 {
     receiver.iter().for_each(|(ident, header, data)| {
-        if let Some(data) = T::decode(header.cmd, data.as_slice()) {
-            if let Err(err) = sender.send((ident, data)) {
-                log::error!("send data to ecs failed {}", err);
-            }
+        let data = T::decode(header.cmd, data.as_slice());
+        if let Err(err) = sender.send((ident, data)) {
+            log::error!("send data to ecs failed {}", err);
         }
     })
 }

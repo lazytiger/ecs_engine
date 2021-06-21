@@ -285,7 +285,7 @@ impl Generator {
         let data = quote!(
             #(#pub_ident mod #mods;)*
 
-            use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender};
+            use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender, SelfSender};
             use protobuf::Message;
             use specs::{error::Error, World, WorldExt};
 
@@ -301,8 +301,9 @@ impl Generator {
                     let entity = match ident {
                         RequestIdent::Token(token) => {
                             let entity = world.entities().create();
-                            world.write_component::<NetToken>().insert(entity, NetToken::new(token)).map(|_|())?;
                             sender.send_entity(token, entity);
+                            world.write_component::<NetToken>().insert(entity, NetToken::new(token)).map(|_|())?;
+                            world.write_component::<SelfSender>().insert(entity, SelfSender::new(token, sender.clone())).map(|_|())?;
                             entity
                         },
                         RequestIdent::Close(entity) => {

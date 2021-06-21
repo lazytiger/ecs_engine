@@ -2,7 +2,7 @@ use crate::{
     component::Closing,
     network::{RequestData, ResponseSender},
     sync::Changeset,
-    Input, NetToken,
+    Input, NetToken, RequestIdent,
 };
 use crossbeam::channel::Receiver;
 use specs::{
@@ -78,8 +78,24 @@ where
     fn run_now(&mut self, world: &'a World) {
         self.receiver.try_iter().for_each(|(ident, data)| {
             log::debug!("new request found");
-            if let Err(err) = data.add_component(ident, world, &self.sender) {
-                log::error!("add component failed:{}", err);
+            if let Some(data) = data {
+                if let Err(err) = data.add_component(ident, world, &self.sender) {
+                    log::error!("add component failed:{}", err);
+                }
+            } else {
+                match ident {
+                    RequestIdent::Entity(entity) => {
+                        if let Some(token) = world.read_component::<NetToken>().get(entity) {
+                            self.sender.send_close(token.token(), false);
+                        } else {
+                            log::error!("entity:{:?} has no NetToken component", entity);
+                        }
+                    }
+                    RequestIdent::Token(token) => {
+                        self.sender.send_close(token, false);
+                    }
+                    _ => unreachable!("close shouldn't decode failed"),
+                }
             }
         })
     }
