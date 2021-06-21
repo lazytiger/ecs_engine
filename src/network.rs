@@ -22,10 +22,14 @@ use crate::Input;
 
 pub trait HeaderFn = Fn(&[u8]) -> Header;
 
+/// 请求标识
 #[derive(Clone)]
 pub enum RequestIdent {
+    /// Entity已经建立，正常工作中
     Entity(Entity),
+    /// 网络端连接已经关闭
     Close(Entity),
+    /// 握手包，通知当前的网络Token
     Token(Token),
 }
 
@@ -210,6 +214,9 @@ where
 
         self.last_write_time = Instant::now();
         loop {
+            if data.is_empty() {
+                break;
+            }
             match self.stream.write(data) {
                 Ok(size) => data = &data[size..],
                 Err(err) if err.kind() == ErrorKind::WouldBlock => {
@@ -373,6 +380,19 @@ where
         self.write(write_bytes.as_slice());
     }
 
+    fn do_send(&mut self, registry: &Registry, data: &[u8]) {
+        self.write(data);
+        self.reregister(registry);
+    }
+
+    fn do_close(&mut self, confirm: bool) {
+        if confirm {
+            self.close();
+        } else {
+            self.shutdown();
+        }
+    }
+
     fn is_timeout(
         &self,
         idle_timeout: Duration,
@@ -438,8 +458,13 @@ where
 }
 
 pub enum Response {
+    /// 握手完成，返回对应的Entity
     Entity(Entity),
+    /// 需要发送给用户的数据
     Data(Vec<u8>),
+    /// 逻辑端需要关闭网络连接
+    /// true表示Ecs已经确认清理完成，网络端可以释放资源了
+    /// false表示Ecs发现问题，需要网络端关闭连接
     Close(bool),
 }
 
@@ -530,25 +555,22 @@ where
         }
     }
 
-    pub fn do_send(&mut self) {
+    pub fn do_send(&mut self, registry: &Registry) {
         let receiver = self.receiver.take().unwrap();
         receiver.try_iter().for_each(|(tokens, data)| {
-            for token in tokens {
-                if let Some(conn) = self.conns.get_mut(Self::token2index(token)) {
-                    match &data {
-                        Response::Data(data) => conn.write(data.as_slice()),
-                        Response::Entity(entity) => conn.set_entity(*entity),
-                        Response::Close(done) => {
-                            if *done {
-                                conn.close()
-                            } else {
-                                conn.shutdown();
-                            }
-                        }
-                    }
-                } else {
-                    log::error!("connection:{} not found", Self::token2index(token));
+            let conns = tokens
+                .into_iter()
+                .filter_map(|token| self.conns.get(Self::token2index(token)))
+                .map(|conn| unsafe {
+                    #[allow(mutable_transmutes)]
+                    std::mem::transmute::<&Connection<T, N>, &mut Connection<T, N>>(conn)
+                });
+            match data {
+                Response::Data(data) => {
+                    conns.for_each(|conn| conn.do_send(registry, data.as_slice()))
                 }
+                Response::Entity(entity) => conns.for_each(|conn| conn.set_entity(entity)),
+                Response::Close(confirm) => conns.for_each(|conn| conn.do_close(confirm)),
             }
         });
         self.receiver.replace(receiver);
@@ -616,7 +638,7 @@ where
     loop {
         poll.poll(&mut events, poll_timeout)?;
         let registry = poll.registry();
-        listener.do_send();
+        listener.do_send(registry);
         for event in &events {
             match event.token() {
                 LISTENER => listener.accept(registry)?,

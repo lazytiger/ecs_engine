@@ -56,6 +56,7 @@ impl Component for Closing {
     type Storage = NullStorage<Self>;
 }
 
+/// 单用于发送数据给自己
 pub struct SelfSender {
     token: Token,
     sender: ResponseSender,
