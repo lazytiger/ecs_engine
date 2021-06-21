@@ -558,19 +558,22 @@ where
     pub fn do_send(&mut self, registry: &Registry) {
         let receiver = self.receiver.take().unwrap();
         receiver.try_iter().for_each(|(tokens, data)| {
-            let conns = tokens
-                .into_iter()
-                .filter_map(|token| self.conns.get(Self::token2index(token)))
-                .map(|conn| unsafe {
-                    #[allow(mutable_transmutes)]
-                    std::mem::transmute::<&Connection<T, N>, &mut Connection<T, N>>(conn)
-                });
-            match data {
-                Response::Data(data) => {
-                    conns.for_each(|conn| conn.do_send(registry, data.as_slice()))
+            for token in tokens {
+                if let Some(conn) = self.conns.get_mut(Self::token2index(token)) {
+                    match &data {
+                        Response::Data(data) => conn.do_send(registry, data.as_slice()),
+                        Response::Entity(entity) => conn.set_entity(*entity),
+                        Response::Close(done) => {
+                            if *done {
+                                conn.close()
+                            } else {
+                                conn.shutdown();
+                            }
+                        }
+                    }
+                } else {
+                    log::error!("connection:{} not found", Self::token2index(token));
                 }
-                Response::Entity(entity) => conns.for_each(|conn| conn.set_entity(entity)),
-                Response::Close(confirm) => conns.for_each(|conn| conn.do_close(confirm)),
             }
         });
         self.receiver.replace(receiver);
