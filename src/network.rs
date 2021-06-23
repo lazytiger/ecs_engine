@@ -333,6 +333,9 @@ impl Connection {
     }
 
     fn do_write(&mut self) {
+        if self.write_bytes.is_empty() {
+            return;
+        }
         let mut write_bytes = Vec::new();
         std::mem::swap(&mut self.write_bytes, &mut write_bytes);
         self.write(write_bytes.as_slice());
