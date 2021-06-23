@@ -6,18 +6,18 @@ use std::ops::{Deref, DerefMut};
 
 macro_rules! component {
     ($storage:ident, $name:ident) => {
-        #[derive(Debug)]
-        pub struct $name<T> {
+        #[derive(Debug, Default)]
+        pub struct $name<T: Default> {
             data: T,
         }
 
-        impl<T> Component for $name<T>
+        impl<T: Default> Component for $name<T>
         where
             T: 'static + Sync + Send,
         {
             type Storage = $storage<Self>;
         }
-        impl<T> Deref for $name<T> {
+        impl<T: Default> Deref for $name<T> {
             type Target = T;
 
             fn deref(&self) -> &Self::Target {
@@ -25,13 +25,13 @@ macro_rules! component {
             }
         }
 
-        impl<T> DerefMut for $name<T> {
+        impl<T: Default> DerefMut for $name<T> {
             fn deref_mut(&mut self) -> &mut Self::Target {
                 &mut self.data
             }
         }
 
-        impl<T> $name<T> {
+        impl<T: Default> $name<T> {
             pub fn new(data: T) -> Self {
                 Self { data }
             }
@@ -43,11 +43,11 @@ component!(HashMapStorage, HashComponent);
 component!(VecStorage, VecComponent);
 component!(DenseVecStorage, DenseVecComponent);
 
-pub type NetToken = VecComponent<Token>;
+pub type NetToken = VecComponent<usize>;
 
 impl NetToken {
     pub fn token(&self) -> Token {
-        self.data
+        Token(self.data)
     }
 }
 
