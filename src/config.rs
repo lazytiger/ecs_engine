@@ -285,6 +285,7 @@ impl Generator {
         let data = quote!(
             #(#pub_ident mod #mods;)*
 
+            use byteorder::{BigEndian, ByteOrder};
             use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender, SelfSender};
             use protobuf::Message;
             use specs::{error::Error, World, WorldExt};
@@ -323,7 +324,13 @@ impl Generator {
                     #(world.register::<#names>();)*
                 }
 
-                fn decode(cmd:u32, buffer:&[u8]) ->Option<Self> {
+                fn decode(mut buffer:&[u8]) ->Option<Self> {
+                    if buffer.len() == 0 {
+                        return Some(Request::None);
+                    }
+
+                    let cmd = BigEndian::read_u32(buffer);
+                    buffer = &buffer[4..];
                     match cmd {
                     #(
                             #cmds => {
@@ -332,7 +339,6 @@ impl Generator {
                                 Some(Request::#names(#names::new(data)))
                             },
                     )*
-                        0 => Some(Request::None),
                         _ => {
                             log::error!("invalid cmd:{}", cmd);
                             None

@@ -11,7 +11,6 @@ mod sync;
 mod system;
 
 use crate::{network::async_run, system::InputSystem};
-use network::HeaderFn;
 use specs::{DispatcherBuilder, World, WorldExt};
 use std::{thread::sleep, time::Duration};
 
@@ -44,10 +43,15 @@ pub trait Input: Sized {
     fn setup(world: &mut World);
 
     /// Decode actual type as header specified.
-    fn decode(cmd: u32, data: &[u8]) -> Option<Self>;
+    fn decode(data: &[u8]) -> Option<Self>;
 
     #[cfg(feature = "debug")]
     fn encode(&self) -> Vec<u8>;
+}
+
+pub trait Output: Sized {
+    #[cfg(feature = "debug")]
+    fn decode(data: &[u8]) -> Option<Self>;
 }
 
 /// 只读封装，如果某个变量从根本上不希望进行修改，则可以使用此模板类型
@@ -69,9 +73,8 @@ pub enum BuildEngineError {
     DecoderNotSet,
 }
 
-pub struct EngineBuilder<T> {
+pub struct EngineBuilder {
     address: Option<SocketAddr>,
-    decoder: Option<T>,
     fps: u32,
     idle_timeout: Duration,
     read_timeout: Duration,
@@ -79,14 +82,9 @@ pub struct EngineBuilder<T> {
     poll_timeout: Option<Duration>,
 }
 
-impl<T: Clone> EngineBuilder<T> {
+impl EngineBuilder {
     pub fn with_address(mut self, address: SocketAddr) -> Self {
         self.address.replace(address);
-        self
-    }
-
-    pub fn with_decoder(mut self, decoder: T) -> Self {
-        self.decoder.replace(decoder);
         self
     }
 
@@ -115,42 +113,30 @@ impl<T: Clone> EngineBuilder<T> {
         self
     }
 
-    pub fn build(self) -> Result<Engine<T>, BuildEngineError> {
+    pub fn build(self) -> Result<Engine, BuildEngineError> {
         if self.address.is_none() {
             return Err(BuildEngineError::AddressNotSet);
         }
-        if self.decoder.is_none() {
-            return Err(BuildEngineError::DecoderNotSet);
-        }
         let address = self.address.clone().unwrap();
-        let decoder = self.decoder.clone().unwrap();
         let sleep = Duration::new(1, 0) / self.fps;
         Ok(Engine {
             address,
-            decoder,
             sleep,
             builder: self,
         })
     }
 }
 
-pub struct Engine<T> {
+pub struct Engine {
     address: SocketAddr,
-    decoder: T,
     sleep: Duration,
-    builder: EngineBuilder<T>,
+    builder: EngineBuilder,
 }
 
-impl<T> Engine<T>
-where
-    T: HeaderFn,
-    T: Clone,
-    T: Send + Sync + 'static,
-{
-    pub fn builder() -> EngineBuilder<T> {
+impl Engine {
+    pub fn builder() -> EngineBuilder {
         EngineBuilder {
             address: None,
-            decoder: None,
             fps: 30,
             idle_timeout: Duration::new(30 * 60, 0),
             read_timeout: Duration::new(30, 0),
@@ -159,14 +145,13 @@ where
         }
     }
 
-    pub fn run<R, S, const N: usize>(self, setup: S)
+    pub fn run<R, S>(self, setup: S)
     where
         R: Input + Send + Sync + 'static,
         S: Fn(&mut World, &mut DispatcherBuilder, &DynamicManager),
     {
-        let (receiver, sender) = async_run::<R, _, N>(
+        let (receiver, sender) = async_run::<R>(
             self.address,
-            self.decoder,
             self.builder.idle_timeout,
             self.builder.read_timeout,
             self.builder.write_timeout,

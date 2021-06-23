@@ -19,8 +19,7 @@ use slab::Slab;
 use specs::Entity;
 
 use crate::Input;
-
-pub trait HeaderFn = Fn(&[u8]) -> Header;
+use byteorder::{BigEndian, ByteOrder};
 
 /// 请求标识
 #[derive(Clone)]
@@ -118,10 +117,7 @@ enum EcsStatus {
     CloseConfirmed,
 }
 
-struct Connection<T, const N: usize>
-where
-    T: HeaderFn,
-{
+struct Connection {
     stream: TcpStream,
     tag: String,
     token: Token,
@@ -131,24 +127,15 @@ where
     last_time: Instant,
     last_read_time: Instant,
     last_write_time: Instant,
-    decoder: T,
-    header: Header,
     sender: Sender<NetworkInputData>,
     ident: RequestIdent,
     conn_status: ConnStatus,
     ecs_status: EcsStatus,
+    length: usize,
 }
 
-impl<T, const N: usize> Connection<T, N>
-where
-    T: HeaderFn,
-{
-    pub fn new(
-        stream: TcpStream,
-        address: SocketAddr,
-        decoder: T,
-        sender: Sender<NetworkInputData>,
-    ) -> Self {
+impl Connection {
+    pub fn new(stream: TcpStream, address: SocketAddr, sender: Sender<NetworkInputData>) -> Self {
         let tag = address.to_string();
         Self {
             stream,
@@ -160,12 +147,11 @@ where
             last_time: Instant::now(),
             last_read_time: Instant::now(),
             last_write_time: Instant::now(),
-            decoder,
-            header: Header::default(),
             sender,
             ident: RequestIdent::Token(Token(0)),
             conn_status: ConnStatus::Established,
             ecs_status: EcsStatus::Initializing,
+            length: 0,
         }
     }
 
@@ -213,10 +199,7 @@ where
         }
 
         self.last_write_time = Instant::now();
-        loop {
-            if data.is_empty() {
-                break;
-            }
+        while !data.is_empty() {
             match self.stream.write(data) {
                 Ok(size) => data = &data[size..],
                 Err(err) if err.kind() == ErrorKind::WouldBlock => {
@@ -240,7 +223,7 @@ where
             self.conn_status = ConnStatus::Closed;
             self.read_bytes.clear();
             self.write_bytes.clear();
-            self.header.clear();
+            self.length = 0;
             self.send_close();
             log::info!("[{}]connection closed now", self.tag);
         } else {
@@ -297,14 +280,14 @@ where
         let mut read_bytes = read_bytes_vec.as_slice();
         let mut new_header = false;
         loop {
-            if !self.header.empty() && read_bytes.len() >= self.header.length {
-                let body: Vec<_> = read_bytes[..self.header.length].into();
-                read_bytes = &read_bytes[self.header.length..];
+            if self.length > 0 && read_bytes.len() >= self.length {
+                let body: Vec<_> = read_bytes[..self.length].into();
+                read_bytes = &read_bytes[self.length..];
                 self.send_ecs(body);
-                self.header.clear();
-            } else if self.header.empty() && read_bytes.len() >= N {
-                self.header = (self.decoder)(&read_bytes[..N]);
-                read_bytes = &read_bytes[N..];
+                self.length = 0;
+            } else if self.length == 0 && read_bytes.len() >= 4 {
+                self.length = BigEndian::read_u32(read_bytes) as usize;
+                read_bytes = &read_bytes[4..];
                 new_header = true;
             } else {
                 break;
@@ -332,22 +315,13 @@ where
                 );
                 return;
             }
-            EcsStatus::EntityReceived => {
-                if self.header.cmd == 0 {
-                    log::error!("[{}]invalid request cmd 0 found, close now", self.tag);
-                    self.shutdown();
-                    return;
-                }
-            }
+            EcsStatus::EntityReceived => {}
             _ => {
                 log::error!("[{}]close sent to ecs, should not send more data", self.tag);
                 return;
             }
         }
-        if let Err(err) = self
-            .sender
-            .send((self.ident.clone(), self.header.clone(), data))
-        {
+        if let Err(err) = self.sender.send((self.ident.clone(), data)) {
             log::error!("[{}]send data to ecs failed:{}", self.tag, err);
         }
     }
@@ -400,7 +374,7 @@ where
         write_timeout: Duration,
     ) -> bool {
         if let ConnStatus::Established = self.conn_status {
-            if self.header.length != 0 && self.last_read_time.elapsed() > read_timeout {
+            if self.length != 0 && self.last_read_time.elapsed() > read_timeout {
                 log::warn!("[{}]read timeout", self.tag);
                 return true;
             }
@@ -468,35 +442,26 @@ pub enum Response {
     Close(bool),
 }
 
-pub type NetworkInputData = (RequestIdent, Header, Vec<u8>);
+pub type NetworkInputData = (RequestIdent, Vec<u8>);
 pub type RequestData<T> = (RequestIdent, Option<T>);
 pub type NetworkOutputData = (Vec<Token>, Response);
 
-struct Listener<T, const N: usize>
-where
-    T: HeaderFn,
-{
+struct Listener {
     listener: TcpListener,
-    conns: Slab<Connection<T, N>>,
+    conns: Slab<Connection>,
     sender: Sender<NetworkInputData>,
     receiver: Option<Receiver<NetworkOutputData>>,
-    decoder: T,
     idle_timeout: Duration,
     read_timeout: Duration,
     write_timeout: Duration,
 }
 
-impl<T, const N: usize> Listener<T, N>
-where
-    T: HeaderFn,
-    T: Clone,
-{
+impl Listener {
     pub fn new(
         listener: TcpListener,
         capacity: usize,
         sender: Sender<NetworkInputData>,
         receiver: Receiver<NetworkOutputData>,
-        decoder: T,
         idle_timeout: Duration,
         read_timeout: Duration,
         write_timeout: Duration,
@@ -506,7 +471,6 @@ where
             conns: Slab::with_capacity(capacity),
             sender,
             receiver: Some(receiver),
-            decoder,
             idle_timeout,
             read_timeout,
             write_timeout,
@@ -523,15 +487,14 @@ where
                 Err(err) => return Err(err),
                 Ok((stream, addr)) => {
                     log::info!("accept connection:{}", addr);
-                    let conn =
-                        Connection::new(stream, addr, self.decoder.clone(), self.sender.clone());
+                    let conn = Connection::new(stream, addr, self.sender.clone());
                     self.insert(registry, conn);
                 }
             }
         }
     }
 
-    fn insert(&mut self, registry: &Registry, conn: Connection<T, N>) {
+    fn insert(&mut self, registry: &Registry, conn: Connection) {
         let index = self.conns.insert(conn);
         let conn = self.conns.get_mut(index).unwrap();
         conn.set_token(Self::index2token(index));
@@ -607,30 +570,24 @@ const LISTENER: Token = Token(1);
 const ECS_SENDER: Token = Token(2);
 const MIN_CLIENT: usize = 3;
 
-pub fn run_network<D, const N: usize>(
+pub fn run_network(
     mut poll: Poll,
     address: SocketAddr,
     sender: Sender<NetworkInputData>,
     receiver: Receiver<NetworkOutputData>,
-    decoder: D,
     idle_timeout: Duration,
     read_timeout: Duration,
     write_timeout: Duration,
     poll_timeout: Option<Duration>,
-) -> Result<()>
-where
-    D: HeaderFn,
-    D: Clone,
-{
+) -> Result<()> {
     let mut listener = TcpListener::bind(address)?;
     poll.registry()
         .register(&mut listener, LISTENER, Interest::READABLE)?;
-    let mut listener: Listener<_, N> = Listener::new(
+    let mut listener = Listener::new(
         listener,
         4096,
         sender,
         receiver,
-        decoder,
         idle_timeout,
         read_timeout,
         write_timeout,
@@ -657,9 +614,8 @@ where
     }
 }
 
-pub fn async_run<T, D, const N: usize>(
+pub fn async_run<T>(
     address: SocketAddr,
-    decoder: D,
     idle_timeout: Duration,
     read_timeout: Duration,
     write_timeout: Duration,
@@ -667,9 +623,6 @@ pub fn async_run<T, D, const N: usize>(
 ) -> (Receiver<RequestData<T>>, ResponseSender)
 where
     T: Send + Input + 'static,
-    D: HeaderFn,
-    D: Clone,
-    D: Sync + Send + 'static,
 {
     // network send data to decode, one-to-one
     let (network_sender, network_receiver) = channel::<NetworkInputData>();
@@ -680,12 +633,11 @@ where
     let poll = Poll::new().unwrap();
     let waker = Arc::new(Waker::new(poll.registry(), ECS_SENDER).unwrap());
     rayon::spawn(move || {
-        if let Err(err) = run_network::<_, N>(
+        if let Err(err) = run_network(
             poll,
             address,
             network_sender,
             response_receiver,
-            decoder,
             idle_timeout,
             read_timeout,
             write_timeout,
@@ -707,8 +659,8 @@ fn run_decode<T>(sender: Sender<RequestData<T>>, receiver: Receiver<NetworkInput
 where
     T: Input,
 {
-    receiver.iter().for_each(|(ident, header, data)| {
-        let data = T::decode(header.cmd, data.as_slice());
+    receiver.iter().for_each(|(ident, data)| {
+        let data = T::decode(data.as_slice());
         if let Err(err) = sender.send((ident, data)) {
             log::error!("send data to ecs failed {}", err);
         }
