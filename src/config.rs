@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fs::{read_dir, File},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -26,7 +25,10 @@ pub enum StorageType {
 pub enum ConfigType {
     Request,
     Response,
-    Component,
+    Component {
+        flagged: Option<bool>,
+        storage: StorageType,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -59,41 +61,30 @@ impl DataType {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Component {
-    pub flagged: bool,
-    pub mask: bool,
-    pub r#type: StorageType,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
 pub struct Field {
-    //pub name: String,
+    pub name: String,
     pub r#type: DataType,
-    pub field: u32,
+    pub index: u32,
     pub repeated: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     pub name: String,
-    pub r#type: ConfigType,
-    pub component: Option<Component>,
-    pub fields: HashMap<String, Field>,
+    pub mask: Option<bool>,
+    pub fields: Vec<Field>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ConfigFile {
+    pub r#type: Option<ConfigType>,
     pub configs: Vec<Config>,
 }
 
 impl Config {
     fn max_number(&self) -> u32 {
-        if let Some((_, c)) = self
-            .fields
-            .iter()
-            .max_by(|(_, a), (_, b)| a.field.cmp(&b.field))
-        {
-            c.field
+        if let Some(c) = self.fields.iter().max_by(|a, b| a.index.cmp(&b.index)) {
+            c.index
         } else {
             0
         }
@@ -117,8 +108,7 @@ pub struct Generator {
 #[derive(Debug, From)]
 pub enum Error {
     Io(std::io::Error),
-    De(toml::de::Error),
-    Ron(ron::Error),
+    Ron(ron::Error, PathBuf),
     DuplicateFieldNumber(String),
     DuplicateCmd,
 }
@@ -167,9 +157,14 @@ impl Generator {
             let mut file = File::open(&input)?;
             let mut data = String::new();
             file.read_to_string(&mut data)?;
-            let cf: ConfigFile = toml::from_str(data.as_str())?;
+            let cf = match ron::from_str::<ConfigFile>(data.as_str()) {
+                Err(err) => {
+                    return Err(Error::from((err, input.clone())));
+                }
+                Ok(cf) => cf,
+            };
             if let Some(config) = cf.configs.iter().find(|config| {
-                let mut fields: Vec<_> = config.fields.iter().map(|(_, f)| f.field).collect();
+                let mut fields: Vec<_> = config.fields.iter().map(|f| f.index).collect();
                 let count = fields.len();
                 fields.sort();
                 fields.dedup();
@@ -466,28 +461,21 @@ impl Generator {
         writeln!(file, r#"syntax = "proto3";"#)?;
         for v in &cf.configs {
             writeln!(file, "message {} {{", v.name)?;
-            let mut fields: Vec<_> = v.fields.iter().collect();
-            fields.sort_by(|(_, f1), (_, f2)| f1.field.cmp(&f2.field));
-            for (name, c) in fields {
+            for field in &v.fields {
                 writeln!(
                     file,
                     "\t{}{} {} = {};",
-                    if c.repeated.is_some() && c.repeated.unwrap() {
+                    if field.repeated.is_some() && field.repeated.unwrap() {
                         "repeated "
                     } else {
                         ""
                     },
-                    c.r#type.to_rust_type(),
-                    name,
-                    c.field
+                    field.r#type.to_rust_type(),
+                    field.name,
+                    field.index,
                 )?;
             }
-            if let ConfigType::Component = v.r#type {
-                let mask = if let Some(component) = &v.component {
-                    component.mask
-                } else {
-                    false
-                };
+            if let Some(mask) = v.mask {
                 if mask {
                     writeln!(file, "u64 mask = {};", v.max_number() + 1)?;
                 }

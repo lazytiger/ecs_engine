@@ -34,22 +34,6 @@ pub enum DataType {
     Bytes,
 }
 
-impl DataType {
-    fn to_rust_type(&self) -> &str {
-        match self {
-            DataType::String => "string",
-            DataType::U32 => "uint32",
-            DataType::U64 => "uint64",
-            DataType::S32 => "sint32",
-            DataType::S64 => "sint64",
-            DataType::F32 => "float",
-            DataType::F64 => "double",
-            DataType::Bool => "bool",
-            DataType::Bytes => "bytes",
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Field {
     pub name: String,
