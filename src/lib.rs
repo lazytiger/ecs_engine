@@ -19,7 +19,7 @@ pub use component::{Closing, HashComponent, NetToken, SelfSender};
 pub use config::Generator;
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
-pub use network::{Header, RequestIdent, ResponseSender};
+pub use network::{RequestIdent, ResponseSender};
 pub use sync::Changeset;
 
 use crate::system::CloseSystem;
@@ -52,6 +52,8 @@ pub trait Input: Sized {
 pub trait Output: Sized {
     #[cfg(feature = "debug")]
     fn decode(data: &[u8]) -> Option<Self>;
+
+    fn encode(&self) -> Vec<u8>;
 }
 
 /// 只读封装，如果某个变量从根本上不希望进行修改，则可以使用此模板类型
@@ -80,6 +82,8 @@ pub struct EngineBuilder {
     read_timeout: Duration,
     write_timeout: Duration,
     poll_timeout: Option<Duration>,
+    max_request_size: usize,
+    max_response_size: usize,
 }
 
 impl EngineBuilder {
@@ -113,6 +117,16 @@ impl EngineBuilder {
         self
     }
 
+    pub fn with_max_request_size(mut self, max_request_size: usize) -> Self {
+        self.max_request_size = max_request_size;
+        self
+    }
+
+    pub fn with_max_response_size(mut self, max_response_size: usize) -> Self {
+        self.max_response_size = max_response_size;
+        self
+    }
+
     pub fn build(self) -> Result<Engine, BuildEngineError> {
         if self.address.is_none() {
             return Err(BuildEngineError::AddressNotSet);
@@ -141,6 +155,8 @@ impl Engine {
             idle_timeout: Duration::new(30 * 60, 0),
             read_timeout: Duration::new(30, 0),
             write_timeout: Duration::new(30, 0),
+            max_request_size: 1024 * 16,
+            max_response_size: 1024 * 16,
             poll_timeout: None,
         }
     }
@@ -156,6 +172,7 @@ impl Engine {
             self.builder.read_timeout,
             self.builder.write_timeout,
             self.builder.poll_timeout,
+            self.builder.max_request_size,
         );
         let mut world = World::new();
         world.insert(sender.clone());

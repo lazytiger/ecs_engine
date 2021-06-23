@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::ResponseSender;
 use mio::Token;
 use specs::{Component, DenseVecStorage, HashMapStorage, NullStorage, VecStorage};

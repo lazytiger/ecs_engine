@@ -72,27 +72,6 @@ impl RequestIdent {
     }
 }
 
-#[derive(Default, Clone, Debug)]
-pub struct Header {
-    pub length: usize,
-    pub cmd: u32,
-}
-
-impl Header {
-    pub fn empty(&self) -> bool {
-        self.cmd == 0
-    }
-
-    pub fn clear(&mut self) {
-        self.cmd = 0;
-        self.length = 0;
-    }
-
-    pub fn new(cmd: u32, length: usize) -> Self {
-        Self { cmd, length }
-    }
-}
-
 #[derive(Debug)]
 enum ConnStatus {
     /// 连接建立，可以正常进行读写，此时如果断开连接，则直接到Closed
@@ -121,7 +100,6 @@ struct Connection {
     stream: TcpStream,
     tag: String,
     token: Token,
-    interests: Interest,
     read_bytes: Vec<u8>,
     write_bytes: Vec<u8>,
     last_time: Instant,
@@ -132,16 +110,21 @@ struct Connection {
     conn_status: ConnStatus,
     ecs_status: EcsStatus,
     length: usize,
+    max_request_size: usize,
 }
 
 impl Connection {
-    pub fn new(stream: TcpStream, address: SocketAddr, sender: Sender<NetworkInputData>) -> Self {
+    pub fn new(
+        stream: TcpStream,
+        address: SocketAddr,
+        sender: Sender<NetworkInputData>,
+        max_request_size: usize,
+    ) -> Self {
         let tag = address.to_string();
         Self {
             stream,
             tag,
             token: Token(0),
-            interests: Interest::READABLE,
             read_bytes: Vec::with_capacity(1024),
             write_bytes: Vec::with_capacity(1024),
             last_time: Instant::now(),
@@ -152,34 +135,25 @@ impl Connection {
             conn_status: ConnStatus::Established,
             ecs_status: EcsStatus::Initializing,
             length: 0,
+            max_request_size,
         }
     }
 
-    fn setup(&mut self, registry: &Registry) {
-        if let Err(err) = registry.register(&mut self.stream, self.token, self.interests) {
+    fn setup(&mut self, token: Token, registry: &Registry) {
+        self.token = token;
+        self.ident.replace_token(token);
+        if let Err(err) = registry.register(
+            &mut self.stream,
+            self.token,
+            Interest::WRITABLE | Interest::READABLE,
+        ) {
             log::error!("[{}]connection register failed:{}", self.tag, err);
         }
     }
 
     fn reregister(&mut self, registry: &Registry) {
         match self.conn_status {
-            ConnStatus::Established => {
-                let mut modified = false;
-                if !self.write_bytes.is_empty() && !self.interests.is_writable() {
-                    modified = true;
-                    self.interests |= Interest::WRITABLE;
-                } else if self.write_bytes.is_empty() && self.interests.is_writable() {
-                    modified = true;
-                    self.interests = Interest::READABLE;
-                }
-                if modified {
-                    if let Err(err) =
-                        registry.reregister(&mut self.stream, self.token, self.interests)
-                    {
-                        log::error!("[{}]reregister failed {}", self.tag, err);
-                    }
-                }
-            }
+            ConnStatus::Established => {}
             ConnStatus::Closed => {
                 if let Err(err) = registry.deregister(&mut self.stream) {
                     log::error!("[{}]connection deregister failed{}", self.tag, err);
@@ -192,11 +166,16 @@ impl Connection {
         }
     }
 
-    fn write(&mut self, mut data: &[u8]) {
-        if !self.write_bytes.is_empty() {
+    fn write(&mut self, data: &[u8]) {
+        let write_bytes = if self.write_bytes.is_empty() {
+            Vec::new()
+        } else {
             self.write_bytes.extend_from_slice(data);
-            return;
-        }
+            let mut write_bytes = Vec::new();
+            std::mem::swap(&mut write_bytes, &mut self.write_bytes);
+            write_bytes
+        };
+        let mut data = write_bytes.as_slice();
 
         self.last_write_time = Instant::now();
         while !data.is_empty() {
@@ -287,6 +266,11 @@ impl Connection {
                 self.length = 0;
             } else if self.length == 0 && read_bytes.len() >= 4 {
                 self.length = BigEndian::read_u32(read_bytes) as usize;
+                if self.length > self.max_request_size {
+                    log::error!("[{}]got invalid request size:{}", self.tag, self.length);
+                    self.shutdown();
+                    return;
+                }
                 read_bytes = &read_bytes[4..];
                 new_header = true;
             } else {
@@ -408,11 +392,6 @@ impl Connection {
         matches!(self.ecs_status, EcsStatus::CloseConfirmed)
     }
 
-    fn set_token(&mut self, token: Token) {
-        self.token = token;
-        self.ident.replace_token(token);
-    }
-
     fn set_entity(&mut self, entity: Entity) {
         log::debug!("[{}]got entity:{:?}", self.tag, entity);
         if let EcsStatus::TokenSent = self.ecs_status {
@@ -477,7 +456,7 @@ impl Listener {
         }
     }
 
-    pub fn accept(&mut self, registry: &Registry) -> Result<()> {
+    pub fn accept(&mut self, registry: &Registry, max_request_size: usize) -> Result<()> {
         loop {
             match self.listener.accept() {
                 Err(err) if err.kind() == ErrorKind::WouldBlock => {
@@ -487,7 +466,7 @@ impl Listener {
                 Err(err) => return Err(err),
                 Ok((stream, addr)) => {
                     log::info!("accept connection:{}", addr);
-                    let conn = Connection::new(stream, addr, self.sender.clone());
+                    let conn = Connection::new(stream, addr, self.sender.clone(), max_request_size);
                     self.insert(registry, conn);
                 }
             }
@@ -497,8 +476,7 @@ impl Listener {
     fn insert(&mut self, registry: &Registry, conn: Connection) {
         let index = self.conns.insert(conn);
         let conn = self.conns.get_mut(index).unwrap();
-        conn.set_token(Self::index2token(index));
-        conn.setup(registry);
+        conn.setup(Self::index2token(index), registry);
         log::info!("connection:{} installed", index);
     }
 
@@ -526,13 +504,7 @@ impl Listener {
                     match &data {
                         Response::Data(data) => conn.do_send(registry, data.as_slice()),
                         Response::Entity(entity) => conn.set_entity(*entity),
-                        Response::Close(done) => {
-                            if *done {
-                                conn.close()
-                            } else {
-                                conn.shutdown();
-                            }
-                        }
+                        Response::Close(confirm) => conn.do_close(*confirm),
                     }
                 } else {
                     log::error!("connection:{} not found", Self::token2index(token));
@@ -579,6 +551,7 @@ pub fn run_network(
     read_timeout: Duration,
     write_timeout: Duration,
     poll_timeout: Option<Duration>,
+    max_request_size: usize,
 ) -> Result<()> {
     let mut listener = TcpListener::bind(address)?;
     poll.registry()
@@ -601,7 +574,7 @@ pub fn run_network(
         listener.do_send(registry);
         for event in &events {
             match event.token() {
-                LISTENER => listener.accept(registry)?,
+                LISTENER => listener.accept(registry, max_request_size)?,
                 ECS_SENDER => {}
                 _ => listener.do_event(event, &poll),
             }
@@ -620,6 +593,7 @@ pub fn async_run<T>(
     read_timeout: Duration,
     write_timeout: Duration,
     poll_timeout: Option<Duration>,
+    max_request_size: usize,
 ) -> (Receiver<RequestData<T>>, ResponseSender)
 where
     T: Send + Input + 'static,
@@ -642,6 +616,7 @@ where
             read_timeout,
             write_timeout,
             poll_timeout,
+            max_request_size,
         ) {
             log::error!("network thread quit with error:{}", err);
         }

@@ -209,7 +209,6 @@ impl Generator {
     fn gen_protos(input_dir: PathBuf, output_dir: PathBuf) -> std::io::Result<()> {
         let files = read_files(input_dir.clone())?;
         let mut customize = Customize::default();
-        //customize.gen_mod_rs = Some(true);
         customize.generate_accessors = Some(true);
         customize.expose_fields = Some(false);
         let mut codegen = Codegen::new();
@@ -358,12 +357,10 @@ impl Generator {
                         )*
                         Request::None => 0,
                     };
-                    unsafe {
-                        let header:[u8; 8]  = std::mem::transmute(((data.len() - 8) as u32,  cmd as u32));
-                        let data = data.as_mut_slice();
-                        let data = &mut data[..8];
-                        data.copy_from_slice(&header);
-                    }
+                    let length = (data.len() - 4) as u32;
+                    let mut header = data.as_mut_slice();
+                    BigEndian::write_u32(header, length);
+                    BigEndian::write_u32(&mut header[4..], cmd);
                     data
                 }
             }
