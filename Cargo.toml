@@ -28,6 +28,7 @@ protobuf-codegen-pure = { path = "../protobuf/protobuf-codegen-pure" }
 md5 = "0.7"
 crossbeam = "0.8"
 byteorder = "1.4"
+proc-macro2 = "1.0"
 
 [features]
 debug = []

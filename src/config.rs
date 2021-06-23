@@ -1,7 +1,3 @@
-use derive_more::From;
-use protobuf_codegen_pure::{Codegen, Customize};
-use quote::{format_ident, quote};
-use serde_derive::Deserialize;
 use std::{
     collections::HashMap,
     fs::{read_dir, File},
@@ -9,6 +5,13 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+
+use byteorder::{BigEndian, ByteOrder};
+use derive_more::From;
+use proc_macro2::Ident;
+use protobuf_codegen_pure::{Codegen, Customize};
+use quote::{format_ident, quote};
+use serde_derive::Deserialize;
 
 #[derive(Deserialize, Debug)]
 pub enum StorageType {
@@ -199,7 +202,65 @@ impl Generator {
     }
 
     fn gen_response(&self) -> Result<(), Error> {
-        Ok(())
+        self.gen_config(
+            "responses",
+            self.response_dir.clone(),
+            |mods, names, files, cmds| {
+                quote!(
+                    #(mod #mods;)*
+
+                    use byteorder::{BigEndian, ByteOrder};
+                    use ecs_engine::Output;
+                    use protobuf::Message;
+
+                    #(pub use #files::#names;)*
+
+                    #[derive(Debug)]
+                    pub enum Response {
+                        #(#names(#names),)*
+                    }
+
+                    impl Output for Response {
+                        #[cfg(feature="debug")]
+                        fn decode(mut buffer:&[u8]) ->Option<Self> {
+                            let cmd = BigEndian::read_u32(buffer);
+                            buffer = &buffer[4..];
+                            match cmd {
+                            #(
+                                    #cmds => {
+                                        let mut data = #names::new();
+                                        data.merge_from_bytes(buffer).unwrap();
+                                        Some(Response::#names(data))
+                                    },
+                            )*
+                                _ => {
+                                    log::error!("invalid cmd:{}", cmd);
+                                    None
+                                },
+                            }
+                        }
+
+                        fn encode(&self) -> Vec<u8> {
+                            let mut data = vec![0u8;8];
+                            let cmd = match self {
+                                #(
+                                    Response::#names(r) => {
+                                        r.write_to_vec(&mut data).unwrap();
+                                        #cmds
+                                    },
+                                )*
+                            };
+                            let length = (data.len() - 4) as u32;
+                            let header = data.as_mut_slice();
+                            BigEndian::write_u32(header, length);
+                            BigEndian::write_u32(&mut header[4..], cmd);
+                            data
+                        }
+                    }
+                )
+                .to_string()
+            },
+        )
     }
 
     fn gen_component(&self) -> Result<(), Error> {
@@ -207,6 +268,9 @@ impl Generator {
     }
 
     fn gen_protos(input_dir: PathBuf, output_dir: PathBuf) -> std::io::Result<()> {
+        if !output_dir.exists() {
+            std::fs::create_dir_all(output_dir.clone())?;
+        }
         let files = read_files(input_dir.clone())?;
         let mut customize = Customize::default();
         customize.generate_accessors = Some(true);
@@ -222,15 +286,16 @@ impl Generator {
 
     fn string_to_u32(name: &[u8]) -> u32 {
         let digest = md5::compute(name).0;
-        let mut data = [0u8; 4];
-        data.copy_from_slice(&digest[..4]);
-        unsafe { std::mem::transmute::<[u8; 4], u32>(data) }
+        BigEndian::read_u32(&digest[..4])
     }
 
     fn gen_messages(
         configs: &Vec<(PathBuf, ConfigFile)>,
         output_dir: PathBuf,
     ) -> Result<(), Error> {
+        if !output_dir.exists() {
+            std::fs::create_dir_all(output_dir.clone())?;
+        }
         for (k, v) in configs {
             let mut name = k.file_stem().unwrap().to_owned();
             name.push(".proto");
@@ -242,17 +307,20 @@ impl Generator {
         Ok(())
     }
 
-    fn gen_request(&self) -> Result<(), Error> {
+    fn gen_config<F>(&self, config_type: &str, dir: PathBuf, codegen: F) -> Result<(), Error>
+    where
+        F: Fn(Vec<Ident>, Vec<Ident>, Vec<Ident>, Vec<u32>) -> String,
+    {
         let mut config_dir = self.config_dir.clone();
-        config_dir.push("requests");
+        config_dir.push(config_type);
 
         let mut proto_dir = self.proto_dir.clone();
-        proto_dir.push("requests");
+        proto_dir.push(config_type);
 
         let configs = Self::parse_config(config_dir)?;
 
         Self::gen_messages(&configs, proto_dir.clone())?;
-        Self::gen_protos(proto_dir, self.request_dir.clone())?;
+        Self::gen_protos(proto_dir, dir.clone())?;
 
         let mut cmds = Vec::new();
         let mut mods = Vec::new();
@@ -275,13 +343,31 @@ impl Generator {
         if cmd_count != n_cmds.len() {
             return Err(Error::DuplicateCmd);
         }
+        let data = codegen(mods, names, files, cmds);
 
-        #[cfg(feature = "debug")]
-        let pub_ident = quote!(pub);
-        #[cfg(not(feature = "debug"))]
-        let pub_ident = quote!();
+        let mut name = dir.clone();
+        name.push("mod.rs");
+        let mut file = File::create(name.clone())?;
+        writeln!(
+            file,
+            "// This file is generated by ecs_engine. Do not edit."
+        )?;
+        writeln!(file, "// @generated")?;
+        file.write_all(data.as_bytes())?;
+        drop(file);
 
-        let data = quote!(
+        Self::format_file(name)?;
+        Ok(())
+    }
+
+    fn gen_request(&self) -> Result<(), Error> {
+        self.gen_config("requests", self.request_dir.clone(), | mods, names, files, cmds| {
+            #[cfg(feature = "debug")]
+                let pub_ident = quote!(pub);
+            #[cfg(not(feature = "debug"))]
+                let pub_ident = quote!();
+
+            quote!(
             #(#pub_ident mod #mods;)*
 
             use byteorder::{BigEndian, ByteOrder};
@@ -291,6 +377,7 @@ impl Generator {
 
             #(pub type #names = HashComponent<#files::#names>;)*
 
+            #[derive(Debug)]
             pub enum Request {
                 #(#names(#names),)*
                 None,
@@ -358,28 +445,14 @@ impl Generator {
                         Request::None => 0,
                     };
                     let length = (data.len() - 4) as u32;
-                    let mut header = data.as_mut_slice();
+                    let header = data.as_mut_slice();
                     BigEndian::write_u32(header, length);
                     BigEndian::write_u32(&mut header[4..], cmd);
                     data
                 }
             }
-        )
-        .to_string();
-
-        let mut name = self.request_dir.clone();
-        name.push("mod.rs");
-        let mut file = File::create(name.clone())?;
-        writeln!(
-            file,
-            "// This file is generated by ecs_engine. Do not edit."
-        )?;
-        writeln!(file, "// @generated")?;
-        file.write_all(data.as_bytes())?;
-        drop(file);
-
-        Self::format_file(name)?;
-        Ok(())
+        ).to_string()
+        })
     }
 
     fn format_file(file: PathBuf) -> std::io::Result<()> {

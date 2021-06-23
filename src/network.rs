@@ -175,7 +175,12 @@ impl Connection {
             std::mem::swap(&mut write_bytes, &mut self.write_bytes);
             write_bytes
         };
-        let mut data = write_bytes.as_slice();
+
+        let mut data = if write_bytes.is_empty() {
+            data
+        } else {
+            write_bytes.as_slice()
+        };
 
         self.last_write_time = Instant::now();
         while !data.is_empty() {
@@ -336,17 +341,17 @@ impl Connection {
         if self.write_bytes.is_empty() {
             return;
         }
-        let mut write_bytes = Vec::new();
-        std::mem::swap(&mut self.write_bytes, &mut write_bytes);
-        self.write(write_bytes.as_slice());
+        self.write(&[]);
     }
 
     fn do_send(&mut self, registry: &Registry, data: &[u8]) {
+        log::debug!("[{}]got {} bytes data", self.tag, data.len());
         self.write(data);
         self.reregister(registry);
     }
 
     fn do_close(&mut self, confirm: bool) {
+        log::debug!("[{}]got close {}", self.tag, confirm);
         if confirm {
             self.close();
         } else {
@@ -597,6 +602,7 @@ pub fn async_run<T>(
     write_timeout: Duration,
     poll_timeout: Option<Duration>,
     max_request_size: usize,
+    max_response_size: usize,
 ) -> (Receiver<RequestData<T>>, ResponseSender)
 where
     T: Send + Input + 'static,
@@ -629,7 +635,7 @@ where
     });
     (
         request_receiver,
-        ResponseSender::new(response_sender, waker),
+        ResponseSender::new(response_sender, waker, max_response_size),
     )
 }
 
@@ -649,13 +655,19 @@ where
 pub struct ResponseSender {
     sender: Option<Sender<NetworkOutputData>>,
     waker: Option<Arc<Waker>>,
+    max_response_size: usize,
 }
 
 impl ResponseSender {
-    pub fn new(sender: Sender<NetworkOutputData>, waker: Arc<Waker>) -> Self {
+    pub fn new(
+        sender: Sender<NetworkOutputData>,
+        waker: Arc<Waker>,
+        max_response_size: usize,
+    ) -> Self {
         Self {
             sender: Some(sender),
             waker: Some(waker),
+            max_response_size,
         }
     }
 
@@ -666,6 +678,13 @@ impl ResponseSender {
     }
 
     pub fn broadcast_data(&self, tokens: Vec<Token>, data: Vec<u8>) {
+        if data.len() > self.max_response_size {
+            log::error!(
+                "response size:{} is greater than {}",
+                data.len(),
+                self.max_response_size
+            );
+        }
         self.broadcast(tokens, Response::Data(data));
     }
 
@@ -674,7 +693,7 @@ impl ResponseSender {
     }
 
     pub fn send_data(&self, token: Token, data: Vec<u8>) {
-        self.broadcast(vec![token], Response::Data(data));
+        self.broadcast_data(vec![token], data);
     }
 
     pub fn send_entity(&self, token: Token, entity: Entity) {

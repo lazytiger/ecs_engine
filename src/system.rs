@@ -76,6 +76,7 @@ where
     T: Input + Send + Sync + 'static,
 {
     fn run_now(&mut self, world: &'a World) {
+        //TODO how to control input frequency.
         self.receiver.try_iter().for_each(|(ident, data)| {
             log::debug!("new request found");
             if let Some(data) = data {

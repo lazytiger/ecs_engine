@@ -1,11 +1,12 @@
 #![allow(dead_code)]
-use crate::ResponseSender;
+use crate::{Output, ResponseSender};
 use mio::Token;
 use specs::{Component, DenseVecStorage, HashMapStorage, NullStorage, VecStorage};
 use std::ops::{Deref, DerefMut};
 
 macro_rules! component {
     ($storage:ident, $name:ident) => {
+        #[derive(Debug)]
         pub struct $name<T> {
             data: T,
         }
@@ -72,7 +73,8 @@ impl SelfSender {
         Self { token, sender }
     }
 
-    pub fn send_data(&self, data: Vec<u8>) {
+    pub fn send_data<O: Output>(&self, data: O) {
+        let data = data.encode();
         self.sender.send_data(self.token, data);
     }
 

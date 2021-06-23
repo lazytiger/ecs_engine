@@ -27,6 +27,7 @@ use crate::system::CloseSystem;
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
+use std::time::Instant;
 
 /// Trait for requests enum type, it's an aggregation of all requests
 pub trait Input: Sized {
@@ -173,6 +174,7 @@ impl Engine {
             self.builder.write_timeout,
             self.builder.poll_timeout,
             self.builder.max_request_size,
+            self.builder.max_response_size,
         );
         let mut world = World::new();
         world.insert(sender.clone());
@@ -192,6 +194,7 @@ impl Engine {
 
         loop {
             // input
+            let start_time = Instant::now();
             dispatcher.dispatch_thread_local(&world);
             world.maintain();
             // systems
@@ -199,7 +202,10 @@ impl Engine {
             world.maintain();
             // notify network
             sender.flush();
-            sleep(self.sleep);
+            let elapsed = start_time.elapsed();
+            if elapsed < self.sleep {
+                sleep(self.sleep - elapsed);
+            }
         }
     }
 }
