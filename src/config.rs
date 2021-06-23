@@ -11,9 +11,9 @@ use derive_more::From;
 use proc_macro2::Ident;
 use protobuf_codegen_pure::{Codegen, Customize};
 use quote::{format_ident, quote};
-use serde_derive::Deserialize;
+use serde_derive::{Deserialize, Serialize};
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum StorageType {
     Vec,
     DefaultVec,
@@ -22,14 +22,14 @@ pub enum StorageType {
     Null,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum ConfigType {
     Request,
     Response,
     Component,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum DataType {
     String,
     U32,
@@ -58,14 +58,14 @@ impl DataType {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Component {
     pub flagged: bool,
     pub mask: bool,
     pub r#type: StorageType,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Field {
     //pub name: String,
     pub r#type: DataType,
@@ -73,7 +73,7 @@ pub struct Field {
     pub repeated: Option<bool>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     pub name: String,
     pub r#type: ConfigType,
@@ -81,7 +81,7 @@ pub struct Config {
     pub fields: HashMap<String, Field>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ConfigFile {
     pub configs: Vec<Config>,
 }
@@ -118,6 +118,7 @@ pub struct Generator {
 pub enum Error {
     Io(std::io::Error),
     De(toml::de::Error),
+    Ron(ron::Error),
     DuplicateFieldNumber(String),
     DuplicateCmd,
 }

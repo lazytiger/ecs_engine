@@ -1,0 +1,49 @@
+(configs:
+[
+    (
+        name:"UserLogin",
+        fields:[
+            (
+                name:"username",
+                type:String,
+                field:1,
+            ),
+            (
+                name:"password",
+                type:String,
+                field:2,
+            )
+        ]
+    ),
+    (
+        name:"LoginResult",
+        fields:[
+            (
+                name:"result",
+                type:S32,
+                field:1,
+            )
+        ]
+    ),
+    (
+        name:"Position",
+        type:Some(Component(
+            flagged:false,
+            mask:false,
+            type:Vec
+        )),
+        fields:[
+            (
+                name:"x",
+                type:F32,
+                field:1,
+            ),
+            (
+                name:"y",
+                type:F32,
+                field:2,
+            )
+        ]
+    )
+]
+)
