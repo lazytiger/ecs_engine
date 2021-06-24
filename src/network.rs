@@ -18,8 +18,9 @@ use mio::{
 use slab::Slab;
 use specs::Entity;
 
-use crate::Input;
+use crate::{Input, Output};
 use byteorder::{BigEndian, ByteOrder};
+use std::marker::PhantomData;
 
 /// 请求标识
 #[derive(Clone)]
@@ -595,7 +596,7 @@ pub fn run_network(
     }
 }
 
-pub fn async_run<T>(
+pub fn async_run<T, O>(
     address: SocketAddr,
     idle_timeout: Duration,
     read_timeout: Duration,
@@ -603,7 +604,7 @@ pub fn async_run<T>(
     poll_timeout: Option<Duration>,
     max_request_size: usize,
     max_response_size: usize,
-) -> (Receiver<RequestData<T>>, ResponseSender)
+) -> (Receiver<RequestData<T>>, ResponseSender<O>)
 where
     T: Send + Input + 'static,
 {
@@ -652,13 +653,14 @@ where
 }
 
 #[derive(Default, Clone)]
-pub struct ResponseSender {
+pub struct ResponseSender<T> {
     sender: Option<Sender<NetworkOutputData>>,
     waker: Option<Arc<Waker>>,
     max_response_size: usize,
+    _phantom: PhantomData<T>,
 }
 
-impl ResponseSender {
+impl<T> ResponseSender<T> {
     pub fn new(
         sender: Sender<NetworkOutputData>,
         waker: Arc<Waker>,
@@ -668,6 +670,7 @@ impl ResponseSender {
             sender: Some(sender),
             waker: Some(waker),
             max_response_size,
+            _phantom: Default::default(),
         }
     }
 
@@ -677,23 +680,8 @@ impl ResponseSender {
         }
     }
 
-    pub fn broadcast_data(&self, tokens: Vec<Token>, data: Vec<u8>) {
-        if data.len() > self.max_response_size {
-            log::error!(
-                "response size:{} is greater than {}",
-                data.len(),
-                self.max_response_size
-            );
-        }
-        self.broadcast(tokens, Response::Data(data));
-    }
-
     pub fn broadcast_close(&self, tokens: Vec<Token>) {
         self.broadcast(tokens, Response::Close(true));
-    }
-
-    pub fn send_data(&self, token: Token, data: Vec<u8>) {
-        self.broadcast_data(vec![token], data);
     }
 
     pub fn send_entity(&self, token: Token, entity: Entity) {
@@ -708,5 +696,23 @@ impl ResponseSender {
         if let Err(err) = self.waker.as_ref().unwrap().wake() {
             log::error!("wake poll failed:{}", err);
         }
+    }
+}
+
+impl<T: Output> ResponseSender<T> {
+    pub fn broadcast_data<D: Into<T>>(&self, tokens: Vec<Token>, data: D) {
+        let data = data.into().encode();
+        if data.len() > self.max_response_size {
+            log::error!(
+                "response size:{} is greater than {}",
+                data.len(),
+                self.max_response_size
+            );
+        }
+        self.broadcast(tokens, Response::Data(data));
+    }
+
+    pub fn send_data<D: Into<T>>(&self, token: Token, data: D) {
+        self.broadcast_data(vec![token], data);
     }
 }

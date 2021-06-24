@@ -230,7 +230,7 @@ impl Generator {
 
                     #(pub use #files::#names;)*
 
-                    #[derive(Debug, From)]
+                    #[derive(Debug, From, Clone)]
                     pub enum Response {
                         #(#names(#names),)*
                     }
@@ -462,10 +462,10 @@ impl Generator {
 
             use byteorder::{BigEndian, ByteOrder};
             use derive_more::From;
-            use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender};
+            use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender, SelfSender};
             use protobuf::Message;
             use specs::{error::Error, World, WorldExt};
-            use crate::responses::SelfSender;
+            use crate::responses::Response;
 
             #(pub type #names = HashComponent<#files::#names>;)*
 
@@ -476,13 +476,14 @@ impl Generator {
             }
 
             impl Input for Request {
-                fn add_component(self, ident: RequestIdent, world: &World, sender: &ResponseSender) ->Result<(), Error> {
+                type Output = Response;
+                fn add_component(self, ident: RequestIdent, world: &World, sender: ResponseSender<Self::Output>) ->Result<(), Error> {
                     let entity = match ident {
                         RequestIdent::Token(token) => {
                             let entity = world.entities().create();
                             sender.send_entity(token, entity);
                             world.write_component::<NetToken>().insert(entity, NetToken::new(token.0)).map(|_|())?;
-                            world.write_component::<SelfSender>().insert(entity, SelfSender::new(token, sender.clone())).map(|_|())?;
+                            world.write_component::<SelfSender<Self::Output>>().insert(entity, SelfSender::new(token, sender)).map(|_|())?;
                             entity
                         },
                         RequestIdent::Close(entity) => {

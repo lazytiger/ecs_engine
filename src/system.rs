@@ -60,27 +60,28 @@ where
     }
 }
 
-pub struct InputSystem<T> {
-    receiver: Receiver<RequestData<T>>,
-    sender: ResponseSender,
+pub struct InputSystem<I, O> {
+    receiver: Receiver<RequestData<I>>,
+    sender: ResponseSender<O>,
 }
 
-impl<T> InputSystem<T> {
-    pub fn new(receiver: Receiver<RequestData<T>>, sender: ResponseSender) -> InputSystem<T> {
+impl<I, O> InputSystem<I, O> {
+    pub fn new(receiver: Receiver<RequestData<I>>, sender: ResponseSender<O>) -> Self {
         Self { receiver, sender }
     }
 }
 
-impl<'a, T> RunNow<'a> for InputSystem<T>
+impl<'a, I, O> RunNow<'a> for InputSystem<I, O>
 where
-    T: Input + Send + Sync + 'static,
+    I: Input<Output = O> + Send + Sync + 'static,
+    O: Clone,
 {
     fn run_now(&mut self, world: &'a World) {
         //TODO how to control input frequency.
         self.receiver.try_iter().for_each(|(ident, data)| {
             log::debug!("new request found");
             if let Some(data) = data {
-                if let Err(err) = data.add_component(ident, world, &self.sender) {
+                if let Err(err) = data.add_component(ident, world, self.sender.clone()) {
                     log::error!("add component failed:{}", err);
                 }
             } else {
@@ -102,13 +103,26 @@ where
     }
 
     fn setup(&mut self, world: &mut World) {
-        T::setup(world);
+        I::setup(world);
     }
 }
 
-pub struct CloseSystem;
+pub struct CloseSystem<T> {
+    _phantom: PhantomData<T>,
+}
 
-impl<'a> System<'a> for CloseSystem {
+impl<T> CloseSystem<T> {
+    pub fn new() -> Self {
+        Self {
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<'a, T> System<'a> for CloseSystem<T>
+where
+    T: Send + Sync + 'static,
+{
     type SystemData = (
         Entities<'a>,
         ReadStorage<'a, Closing>,
@@ -131,7 +145,7 @@ impl<'a> System<'a> for CloseSystem {
             }
             log::debug!("{} entities deleted", entities.len());
             world
-                .read_resource::<ResponseSender>()
+                .read_resource::<ResponseSender<T>>()
                 .broadcast_close(tokens);
         });
     }

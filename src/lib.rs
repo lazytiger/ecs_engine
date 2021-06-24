@@ -31,13 +31,14 @@ use std::time::Instant;
 
 /// Trait for requests enum type, it's an aggregation of all requests
 pub trait Input: Sized {
+    type Output: Output;
     /// Match the actual type contains in enum, and add it to world.
     /// If entity is none and current type is Login, a new entity will be created.
     fn add_component(
         self,
         ident: RequestIdent,
         world: &World,
-        sender: &ResponseSender,
+        sender: ResponseSender<Self::Output>,
     ) -> std::result::Result<(), specs::error::Error>;
 
     /// Register all the actual types as components
@@ -162,12 +163,13 @@ impl Engine {
         }
     }
 
-    pub fn run<R, S>(self, setup: S)
+    pub fn run<I, O, S>(self, setup: S)
     where
-        R: Input + Send + Sync + 'static,
+        I: Input<Output = O> + Send + Sync + 'static,
+        O: Clone + Send + Sync + 'static,
         S: Fn(&mut World, &mut DispatcherBuilder, &DynamicManager),
     {
-        let (receiver, sender) = async_run::<R>(
+        let (receiver, sender) = async_run::<I, O>(
             self.address,
             self.builder.idle_timeout,
             self.builder.read_timeout,
@@ -183,7 +185,7 @@ impl Engine {
         let dm = DynamicManager::default();
         let mut builder = DispatcherBuilder::new();
         builder.add_thread_local(InputSystem::new(receiver, sender.clone()));
-        builder.add(CloseSystem, "close", &[]);
+        builder.add(CloseSystem::<O>::new(), "close", &[]);
         setup(&mut world, &mut builder, &dm);
 
         world.insert(dm);
