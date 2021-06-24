@@ -89,12 +89,12 @@ pub struct Field {
 pub struct Config {
     pub name: String,
     pub mask: Option<bool>,
+    pub component: Option<Component>,
     pub fields: Vec<Field>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ConfigFile {
-    pub component: Option<Component>,
     pub configs: Vec<Config>,
 }
 
@@ -225,10 +225,11 @@ impl Generator {
                     use byteorder::{BigEndian, ByteOrder};
                     use ecs_engine::Output;
                     use protobuf::Message;
+                    use derive_more::From;
 
                     #(pub use #files::#names;)*
 
-                    #[derive(Debug)]
+                    #[derive(Debug, From)]
                     pub enum Response {
                         #(#names(#names),)*
                     }
@@ -293,17 +294,14 @@ impl Generator {
         let mut files = Vec::new();
         let mut storages = Vec::new();
         for (f, cf) in &configs {
-            let storage = if let Some(component) = &cf.component {
-                component.to_rust_type()
-            } else {
-                quote!(HashMapStorage<Self>)
-            };
             let mod_name = format_ident!("{}", f.file_stem().unwrap().to_str().unwrap());
             mods.push(mod_name.clone());
             for c in &cf.configs {
-                files.push(mod_name.clone());
-                names.push(format_ident!("{}", c.name));
-                storages.push(storage.clone());
+                if let Some(component) = &c.component {
+                    files.push(mod_name.clone());
+                    names.push(format_ident!("{}", c.name));
+                    storages.push(component.to_rust_type());
+                }
             }
         }
         let data = quote!(
@@ -342,9 +340,10 @@ impl Generator {
                 impl Component for Type<#files::#names> {
                     type Storage = #storages;
                 }
+
+                pub type #names = Type<#files::#names>;
             )*
 
-            #(pub type #names = Type<#files::#names>;)*
         )
         .to_string();
         let mut name = self.component_dir.clone();
@@ -461,13 +460,14 @@ impl Generator {
             #(mod #mods;)*
 
             use byteorder::{BigEndian, ByteOrder};
+            use derive_more::From;
             use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender, SelfSender};
             use protobuf::Message;
             use specs::{error::Error, World, WorldExt};
 
             #(pub type #names = HashComponent<#files::#names>;)*
 
-            #[derive(Debug)]
+            #[derive(Debug, From)]
             pub enum Request {
                 #(#names(#names),)*
                 None,
