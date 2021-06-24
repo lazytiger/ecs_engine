@@ -1,5 +1,5 @@
 use serde_derive::{Deserialize, Serialize};
-use std::{convert::TryInto, fs::File, io::Read};
+use std::{convert::TryInto, fs::File, io::Read, marker::PhantomData};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum StorageType {
@@ -120,4 +120,35 @@ fn toml() {
     data.read_to_string(&mut content).unwrap();
     let file: ConfigFile = ron::from_str(content.as_str()).unwrap();
     println!("{:?}", file);
+}
+
+pub trait Output {
+    fn encode(&self) -> Vec<u8>;
+}
+
+pub struct Sender<S> {
+    _phantom: PhantomData<S>,
+}
+
+impl<S: Output> Sender<S> {
+    pub fn send(&self, data: impl Into<S>) {
+        todo!()
+    }
+}
+
+#[derive(derive_more::From)]
+pub enum Test {
+    Hello(Hello),
+}
+
+pub struct Hello;
+
+impl Output for Test {
+    fn encode(&self) -> Vec<u8> {
+        todo!()
+    }
+}
+
+pub fn test(sender: &Sender<Test>) {
+    sender.send(Hello);
 }

@@ -2,10 +2,7 @@
 use crate::{Output, ResponseSender};
 use mio::Token;
 use specs::{Component, DenseVecStorage, HashMapStorage, NullStorage, VecStorage};
-use std::{
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 macro_rules! component {
     ($storage:ident, $name:ident) => {

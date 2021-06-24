@@ -5,7 +5,6 @@ use std::{
     process::Command,
 };
 
-use crate::component::VecComponent;
 use byteorder::{BigEndian, ByteOrder};
 use derive_more::From;
 use proc_macro2::{Ident, TokenStream};

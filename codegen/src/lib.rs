@@ -5,8 +5,8 @@ use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{
     parse_macro_input, parse_quote, spanned::Spanned, token::Pub, Attribute, Field, Fields, FnArg,
-    GenericArgument, ItemFn, ItemStruct, Lit, LitStr, Meta, Pat, PathArguments, ReturnType,
-    Signature, Type, TypePath, VisPublic, Visibility,
+    GenericArgument, ItemFn, ItemStruct, Lit, LitBool, LitStr, Meta, Pat, PathArguments,
+    ReturnType, Signature, Type, TypePath, VisPublic, Visibility,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -33,8 +33,6 @@ enum Error {
     DuplicateDynamicLibraryName,
     #[error("duplicate dynamic function name")]
     DuplicateDynamicFunctionName,
-    #[error("static and dynamic can not appear in both time")]
-    StaticConflictsDynamic,
     #[error("method not found for system, use function instead")]
     SelfNotAllowed,
     #[error("system function parameters must be component references, state references or resource references")]
@@ -188,26 +186,24 @@ fn contains_duplicate(data: &Vec<Type>) -> bool {
 impl Config {
     fn parse(attr: SystemAttr, item: &mut ItemFn) -> Result<Self, Error> {
         let mut to_remove = Vec::new();
-        let mut dynamic = false;
-        let mut fstatic = false;
+        let mut dynamic = true;
         let mut lib_name = None;
         let mut func_name = None;
         for (i, attribute) in item.attrs.iter().enumerate() {
             if let Some(ident) = attribute.path.get_ident() {
-                if ident == "statics" {
-                    to_remove.push(i);
-                    fstatic = true;
-                }
                 if ident == "dynamic" {
-                    dynamic = true;
                     to_remove.push(i);
                     let meta = attribute
                         .parse_meta()
                         .map_err(|_err| Error::InvalidMetaForDynamic(ident.span()))?;
                     let (l, f) = Self::parse_dynamic_meta(&meta)?;
                     if let Some(l) = l {
-                        if lib_name.replace(l).is_some() {
-                            return Err(Error::DuplicateDynamicLibraryName);
+                        if let Lit::Bool(_) = l {
+                            dynamic = false;
+                        } else {
+                            if lib_name.replace(l).is_some() {
+                                return Err(Error::DuplicateDynamicLibraryName);
+                            }
                         }
                     }
                     if let Some(f) = f {
@@ -217,11 +213,6 @@ impl Config {
                     }
                 }
             }
-        }
-        if dynamic && fstatic {
-            return Err(Error::StaticConflictsDynamic);
-        } else if !dynamic && !fstatic {
-            dynamic = true;
         }
 
         for i in to_remove {
@@ -243,10 +234,16 @@ impl Config {
     fn parse_dynamic_meta(meta: &Meta) -> Result<(Option<Lit>, Option<Lit>), Error> {
         let result = match meta {
             Meta::Path(path) => {
-                let lit = if path.segments.len() > 0 {
+                let lit = if path.segments.len() == 1 {
                     let ident = &path.segments[0].ident;
-                    let lit = Lit::Str(LitStr::new(ident.to_string().as_str(), ident.span()));
+                    let lit = if ident.to_string() == "false" {
+                        Lit::Bool(LitBool::new(false, ident.span()))
+                    } else {
+                        Lit::Str(LitStr::new(ident.to_string().as_str(), ident.span()))
+                    };
                     Some(lit)
+                } else if path.segments.len() > 1 {
+                    return Err(Error::InvalidMetaForDynamic(path.span()));
                 } else {
                     None
                 };

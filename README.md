@@ -580,7 +580,7 @@ fn test(user:&UserInfo){}
 * static
 ```rust
 #[system]
-#[static]
+#[dynamic(false)]
 fn test(user:&UserInfo){}
 ```
 代表这是一个静态实现，不要忽略test函数，将它编译成代码中，并且在System具体实现中调用它。
@@ -588,7 +588,7 @@ fn test(user:&UserInfo){}
 #export属性
 如果panic在动态链接库里并且未被catch而在调用中catch会导致调用者abort，因此设计了export这个属性来完成以下工作
 * 自动生成转成extern函数，并加上no_mangle的标签
-* 自动将写引用转成读引用，并调用catch_unwind，同时在调用中用transmute再转回可写引用
+* 自动加上catch_unwind防止panic
 * 添加类型检查代码以备类型检查
 
 # 其他关键模块
@@ -596,7 +596,6 @@ fn test(user:&UserInfo){}
 基于mio库来实现一个完全的单线程模型，此模型只做网络分发，不做任何其他编解码的工作，这样一来单线程完全可以胜任全部的工作。
 网络层与ecs核心层之间通过channel来通信，ecs层的消息可以通过mio提供的Waker来通知mio有新的数据需要发送，而新的请求则完全靠
 mio的Poll就可以了。
-TBD
 
 ## 数据层
 rust有一个优秀的数据ORM库，diesel，它实现的功能跟我们目前用go实现的差不多的功能，可以自动比对数据库结构，自动生成更新语句，自动映射等。
@@ -610,4 +609,7 @@ TBD
 
 TBD
 * ~~同一个component不能同时出现在input和output里，加上这个检查~~
-* 有可能input有没匹配上的，需要加日志
+* ~~有可能input有没匹配上的，需要加日志~~
+* 离线用户数据如何处理？
+* 数据集，包括标脏以及同步
+* 数据库，包括持久化以及拉取
