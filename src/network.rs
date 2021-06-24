@@ -209,7 +209,7 @@ impl Connection {
             self.write_bytes.clear();
             self.length = 0;
             self.send_close();
-            log::info!("[{}]connection closed now", self.tag);
+            log::info!("[{}]connection shutdown", self.tag);
         } else {
             log::debug!("[{}]connection already closed", self.tag);
         }
@@ -321,16 +321,16 @@ impl Connection {
                 self.ident.replace_close();
                 self.send_ecs(Vec::new());
                 self.ecs_status = EcsStatus::CloseSent;
-                log::info!("[{}]connection send close to ecs", self.tag);
+                log::debug!("[{}]connection send close to ecs", self.tag);
             }
             EcsStatus::Initializing => {
                 self.ecs_status = EcsStatus::CloseConfirmed;
-                log::info!(
+                log::debug!(
                     "[{}]connection is initializing, close confirm now",
                     self.tag
                 );
             }
-            _ => log::info!(
+            _ => log::debug!(
                 "[{}]connection has not received entity, close later",
                 self.tag
             ),
@@ -385,7 +385,7 @@ impl Connection {
     fn close(&mut self) {
         match self.ecs_status {
             EcsStatus::CloseSent => {
-                log::info!("[{}]ecs confirm closed, it's ok to release now", self.tag);
+                log::debug!("[{}]ecs confirm closed, it's ok to release now", self.tag);
                 self.ecs_status = EcsStatus::CloseConfirmed;
             }
             _ => log::error!(
@@ -473,7 +473,7 @@ impl Listener {
                 }
                 Err(err) => return Err(err),
                 Ok((stream, addr)) => {
-                    log::info!("accept connection:{}", addr);
+                    log::debug!("accept connection:{}", addr);
                     let conn = Connection::new(stream, addr, self.sender.clone(), max_request_size);
                     self.insert(registry, conn);
                 }
@@ -541,7 +541,7 @@ impl Listener {
             .collect();
         indexes.iter().for_each(|index| {
             self.conns.remove(*index);
-            log::info!("connection:{} released now", index);
+            log::debug!("connection:{} released now", index);
         });
     }
 }

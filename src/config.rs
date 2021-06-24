@@ -57,20 +57,22 @@ pub enum DataType {
     F64,
     Bool,
     Bytes,
+    Custom(String),
 }
 
 impl DataType {
-    fn to_pb_type(&self) -> &str {
+    fn to_pb_type(&self) -> String {
         match self {
-            DataType::String => "string",
-            DataType::U32 => "uint32",
-            DataType::U64 => "uint64",
-            DataType::S32 => "sint32",
-            DataType::S64 => "sint64",
-            DataType::F32 => "float",
-            DataType::F64 => "double",
-            DataType::Bool => "bool",
-            DataType::Bytes => "bytes",
+            DataType::String => "string".into(),
+            DataType::U32 => "uint32".into(),
+            DataType::U64 => "uint64".into(),
+            DataType::S32 => "sint32".into(),
+            DataType::S64 => "sint64".into(),
+            DataType::F32 => "float".into(),
+            DataType::F64 => "double".into(),
+            DataType::Bool => "bool".into(),
+            DataType::Bytes => "bytes".into(),
+            DataType::Custom(name) => name.clone(),
         }
     }
 }

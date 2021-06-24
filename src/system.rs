@@ -129,7 +129,7 @@ impl<'a> System<'a> for CloseSystem {
             if let Err(err) = world.delete_entities(entities.as_slice()) {
                 log::error!("delete entities failed:{}", err);
             }
-            log::info!("entities:{:?} deleted", entities);
+            log::debug!("{} entities deleted", entities.len());
             world
                 .read_resource::<ResponseSender>()
                 .broadcast_close(tokens);
