@@ -2,7 +2,10 @@
 use crate::{Output, ResponseSender};
 use mio::Token;
 use specs::{Component, DenseVecStorage, HashMapStorage, NullStorage, VecStorage};
-use std::ops::{Deref, DerefMut};
+use std::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+};
 
 macro_rules! component {
     ($storage:ident, $name:ident) => {
@@ -59,22 +62,33 @@ impl Component for Closing {
 }
 
 /// 单用于发送数据给自己
-pub struct SelfSender {
+pub struct SelfSender<T> {
     token: Token,
     sender: ResponseSender,
+    _phantom: PhantomData<T>,
 }
 
-impl Component for SelfSender {
+impl<T> Component for SelfSender<T>
+where
+    T: Sync + Send + 'static,
+{
     type Storage = VecStorage<Self>;
 }
 
-impl SelfSender {
+impl<T> SelfSender<T>
+where
+    T: Output,
+{
     pub fn new(token: Token, sender: ResponseSender) -> Self {
-        Self { token, sender }
+        Self {
+            token,
+            sender,
+            _phantom: Default::default(),
+        }
     }
 
-    pub fn send_data<O: Output>(&self, data: O) {
-        let data = data.encode();
+    pub fn send_data(&self, data: impl Into<T>) {
+        let data = data.into().encode();
         self.sender.send_data(self.token, data);
     }
 

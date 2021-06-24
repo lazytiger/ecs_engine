@@ -226,6 +226,7 @@ impl Generator {
                     use ecs_engine::Output;
                     use protobuf::Message;
                     use derive_more::From;
+                    pub type SelfSender = ecs_engine::SelfSender<Response>;
 
                     #(pub use #files::#names;)*
 
@@ -461,9 +462,10 @@ impl Generator {
 
             use byteorder::{BigEndian, ByteOrder};
             use derive_more::From;
-            use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender, SelfSender};
+            use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender};
             use protobuf::Message;
             use specs::{error::Error, World, WorldExt};
+            use crate::responses::SelfSender;
 
             #(pub type #names = HashComponent<#files::#names>;)*
 
