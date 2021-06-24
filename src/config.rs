@@ -316,10 +316,19 @@ impl Generator {
                 any::Any,
                 ops::{Deref, DerefMut},
             };
+            use protobuf::Message;
 
             #[derive(Debug, Default)]
             pub struct Type<T:Default> {
                 data: T,
+            }
+
+            impl<T:Message + Default> Type<T> {
+                fn new() ->Self {
+                    Self {
+                        data:T::new(),
+                    }
+                }
             }
 
             impl<T:Default> Deref for Type<T> {
