@@ -56,6 +56,8 @@ pub enum DataType {
     F64,
     Bool,
     Bytes,
+    List(Box<DataType>),
+    Map(Box<DataType>, Box<DataType>),
     Custom(String),
 }
 
@@ -72,6 +74,10 @@ impl DataType {
             DataType::Bool => "bool".into(),
             DataType::Bytes => "bytes".into(),
             DataType::Custom(name) => name.clone(),
+            DataType::List(name) => format!("repeated {}", name.to_pb_type()),
+            DataType::Map(key, value) => {
+                format!("map<{}, {}>", key.to_pb_type(), value.to_pb_type())
+            }
         }
     }
 }
@@ -81,13 +87,11 @@ pub struct Field {
     pub name: String,
     pub r#type: DataType,
     pub index: u32,
-    pub repeated: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     pub name: String,
-    pub mask: Option<bool>,
     pub component: Option<Component>,
     pub fields: Vec<Field>,
 }
@@ -286,7 +290,7 @@ impl Generator {
 
         let configs = Self::parse_config(config_dir)?;
 
-        Self::gen_messages(&configs, proto_dir.clone())?;
+        Self::gen_messages(&configs, proto_dir.clone(), true)?;
         Self::gen_protos(proto_dir, self.component_dir.clone())?;
 
         let mut mods = Vec::new();
@@ -395,6 +399,7 @@ impl Generator {
     fn gen_messages(
         configs: &Vec<(PathBuf, ConfigFile)>,
         output_dir: PathBuf,
+        mask: bool,
     ) -> Result<(), Error> {
         if !output_dir.exists() {
             std::fs::create_dir_all(output_dir.clone())?;
@@ -405,7 +410,7 @@ impl Generator {
             let mut path = output_dir.clone();
             path.push(name);
             let mut file = File::create(path)?;
-            Self::gen_message(&mut file, &v)?;
+            Self::gen_message(&mut file, &v, mask)?;
         }
         Ok(())
     }
@@ -422,7 +427,7 @@ impl Generator {
 
         let configs = Self::parse_config(config_dir)?;
 
-        Self::gen_messages(&configs, proto_dir.clone())?;
+        Self::gen_messages(&configs, proto_dir.clone(), false)?;
         Self::gen_protos(proto_dir, dir.clone())?;
 
         let mut cmds = Vec::new();
@@ -562,28 +567,21 @@ impl Generator {
     }
 
     /// 根据Config类型生成一个Protobuf配置文件
-    fn gen_message(file: &mut File, cf: &ConfigFile) -> std::io::Result<()> {
+    fn gen_message(file: &mut File, cf: &ConfigFile, mask: bool) -> std::io::Result<()> {
         writeln!(file, r#"syntax = "proto3";"#)?;
         for v in &cf.configs {
             writeln!(file, "message {} {{", v.name)?;
             for field in &v.fields {
                 writeln!(
                     file,
-                    "\t{}{} {} = {};",
-                    if field.repeated.is_some() && field.repeated.unwrap() {
-                        "repeated "
-                    } else {
-                        ""
-                    },
+                    "\t{} {} = {};",
                     field.r#type.to_pb_type(),
                     field.name,
                     field.index,
                 )?;
             }
-            if let Some(mask) = v.mask {
-                if mask {
-                    writeln!(file, "  uint64 mask = {};", v.max_number() + 1)?;
-                }
+            if mask {
+                writeln!(file, "\tuint64 mask = {};", v.max_number() + 1)?;
             }
             writeln!(file, "}}")?;
         }
