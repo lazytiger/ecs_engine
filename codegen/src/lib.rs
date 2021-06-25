@@ -1010,32 +1010,7 @@ pub fn changeset(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let impl_code = quote! {
-        impl #name {
-            #(
-                #[inline]
-                pub fn #idents(&self) -> #types_ref #types {
-                    #types_ref self.#idents
-                }
-
-                #[inline]
-                pub fn #ident_muts(&mut self) -> &mut #types {
-                    self.mask |= 1 << #indexes;
-                    &mut self.#idents
-                }
-            )*
-        }
-
-        impl ::ecs_engine::Changeset for #name {
-            #[inline]
-            fn mask(&self) ->u128 {
-                self.mask
-            }
-
-            #[inline]
-            fn mask_mut(&mut self) -> &mut u128 {
-                &mut self.mask
-            }
-
+        impl ::ecs_engine::ChangeSet for #name {
             #[inline]
             fn index() -> usize {
                 #index

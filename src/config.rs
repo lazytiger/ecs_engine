@@ -92,6 +92,7 @@ pub struct Field {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
     pub name: String,
+    pub hide: Option<bool>,
     pub component: Option<Component>,
     pub fields: Vec<Field>,
 }
@@ -471,6 +472,9 @@ impl Generator {
             let mod_name = format_ident!("{}", f.file_stem().unwrap().to_str().unwrap());
             mods.push(mod_name.clone());
             for c in &cf.configs {
+                if let Some(true) = c.hide {
+                    continue;
+                }
                 cmds.push(Self::string_to_u32(c.name.as_bytes()));
                 files.push(mod_name.clone());
                 names.push(format_ident!("{}", c.name));
