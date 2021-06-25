@@ -605,6 +605,107 @@ TBD
 * 一个组件即是一个数据集，担任与客户端的同步最小单元
 * 因为数据集里可能是个数组，比如物品，比如技能等等，所以需要考虑如何同步数组
 * 比如数组内元素的增删改，因此需要有标识，主要是如何同步删除信息
+* pb3实现了对map的支持，因此我们利用这个特性可以比较容易的实现数组同步
+    * 首先要求所有的数组都用map来实现，因为我们要利用key来实现同步
+    * 另外要求所有数组的value也必须是一个message类型
+    * 所有的message都自动添加一个mask字段用于标识哪些字段进行了修改
+    * 编码时，添加了如下代码：
+    ```rust
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        if self.is_dirty_field(1) {
+            if self.x != 0. {
+                os.write_float(1, self.x)?;
+            }
+        }
+        if self.is_dirty_field(2) {
+            if self.y != 0. {
+                os.write_float(2, self.y)?;
+            }
+        }
+        if self.is_dirty_field(3) {
+            ::protobuf::rt::write_map_with_cached_sizes::<::protobuf::types::ProtobufTypeUint32, ::protobuf::types::ProtobufTypeMessage<Test>>(3, &self.tests, os)?;
+        }
+        if self.mask != 0 {
+            os.write_uint64(4, self.mask)?;
+        }
+        os.write_unknown_fields(self.get_unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+    ```
+    * 解码时，比较复杂，大致流程如下：
+    ```rust
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
+        let mut mask = 0u64;
+        let mut has_mask = false;
+        self.tests.iter_mut().for_each(|(_, v)|v.mask = 1);
+        while !is.eof()? {
+            let (field_number, wire_type) = is.read_tag_unpack()?;
+            match field_number {
+                1 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeFixed32 {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_float()?;
+                    self.x = tmp;
+                    mask |= 1 << 1;
+                },
+                2 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeFixed32 {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_float()?;
+                    self.y = tmp;
+                    mask |= 1 << 2;
+                },
+                3 => {
+                    ::protobuf::rt::read_map_into::<::protobuf::types::ProtobufTypeUint32, ::protobuf::types::ProtobufTypeMessage<Test>>(wire_type, is, &mut self.tests)?;
+                    mask |= 1 << 3;
+                },
+                4 => {
+                    if wire_type != ::protobuf::wire_format::WireTypeVarint {
+                        return ::std::result::Result::Err(::protobuf::rt::unexpected_wire_type(wire_type));
+                    }
+                    let tmp = is.read_uint64()?;
+                    self.mask = tmp;
+                    mask |= 1 << 4;
+                    has_mask = true;
+                },
+                _ => {
+                    ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
+                },
+            };
+        }
+        if !has_mask {
+            self.mask = 0;
+        }
+        let old_mask = self.mask;
+        self.mask &= ! mask;
+        while self.mask != 0 {
+            let field_number = self.mask.trailing_zeros();
+            match field_number {
+                1 => {
+                    self.clear_x();
+                    self.clear_dirty_field(1);
+                },
+                2 => {
+                    self.clear_y();
+                    self.clear_dirty_field(2);
+                },
+                3 => {
+                    self.clear_tests();
+                    self.clear_dirty_field(3);
+                },
+                _ => {
+                    return Err(::protobuf::ProtobufError::WireError(::protobuf::error::WireError::Other));
+                },
+            };
+        }
+        self.mask = old_mask;
+        let keys:Vec<_> = self.tests.iter().filter_map(|(k, v)|if v.mask == 1 { Some(k.clone()) } else { None }).collect();
+        keys.iter().for_each(|k|{self.tests.remove(k);});
+        ::std::result::Result::Ok(())
+    }
+    ```
 
 # 典型应用场景实现
 希望大家可以fork本工程出来，然后实现一些常见功能并补充到下面
