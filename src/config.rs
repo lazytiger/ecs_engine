@@ -296,6 +296,16 @@ impl Generator {
                     if let DataType::List(_) = f.r#type {
                         return Err(Error::ComponentListUsed(path.clone(), config.name.clone()));
                     }
+                    if let DataType::Map(_, v) = &f.r#type {
+                        if let DataType::Custom(_) = v.as_ref() {
+                            continue;
+                        } else {
+                            return Err(Error::ComponentListUsed(
+                                path.clone(),
+                                config.name.clone(),
+                            ));
+                        }
+                    }
                 }
             }
         }
