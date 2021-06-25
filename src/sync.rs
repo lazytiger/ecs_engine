@@ -1,3 +1,4 @@
+use protobuf::Mask;
 use std::{
     ops::{Deref, DerefMut},
     sync::atomic::{AtomicBool, Ordering},
@@ -15,39 +16,8 @@ lazy_static::lazy_static! {
     };
 }
 
-// mask的最高两位表示修改状态
-// 00 表示修改
-// 10 表示新建
-// 11 表示删除
-pub trait Changeset {
-    fn mask(&self) -> u128;
-    fn mask_mut(&mut self) -> &mut u128;
+pub trait ChangeSet {
     fn index() -> usize;
-
-    #[inline]
-    fn is_dirty(&self) -> bool {
-        self.mask() != 0
-    }
-
-    #[inline]
-    fn mask_new(&mut self) {
-        *self.mask_mut() |= 0x80000000;
-    }
-
-    #[inline]
-    fn mask_del(&mut self) {
-        *self.mask_mut() |= 0xc0000000;
-    }
-
-    #[inline]
-    fn is_new(&self) -> bool {
-        self.mask() & 0x80000000 != 0
-    }
-
-    #[inline]
-    fn is_del(&self) -> bool {
-        self.mask() & 0xc0000000 != 0
-    }
 
     #[inline]
     fn set_storage_dirty() {
@@ -65,13 +35,13 @@ pub trait Changeset {
     }
 }
 
-pub struct ChangeSet<T> {
+pub struct DataSet<T> {
     data: T,
     mask_db: u64,
     mask_ct: u64,
 }
 
-impl<T> Deref for ChangeSet<T> {
+impl<T> Deref for DataSet<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -79,13 +49,13 @@ impl<T> Deref for ChangeSet<T> {
     }
 }
 
-impl<T> DerefMut for ChangeSet<T> {
+impl<T> DerefMut for DataSet<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.data
     }
 }
 
-impl<T> ChangeSet<T>
+impl<T> DataSet<T>
 where
     T: protobuf::Mask,
     T: protobuf::Message,

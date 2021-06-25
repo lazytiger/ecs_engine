@@ -20,7 +20,7 @@ pub use config::Generator;
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
 pub use network::{RequestIdent, ResponseSender};
-pub use sync::Changeset;
+pub use sync::ChangeSet;
 
 use crate::system::CloseSystem;
 #[cfg(target_os = "windows")]

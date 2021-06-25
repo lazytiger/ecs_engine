@@ -1,10 +1,11 @@
 use crate::{
     component::Closing,
     network::{RequestData, ResponseSender},
-    sync::Changeset,
+    sync::ChangeSet,
     Input, NetToken, RequestIdent,
 };
 use crossbeam::channel::Receiver;
+use protobuf::Mask;
 use specs::{
     Component, Entities, Join, LazyUpdate, Read, ReadStorage, RunNow, System, World, WorldExt,
     WriteStorage,
@@ -36,7 +37,8 @@ impl<T> Default for CommitChangeSystem<T> {
 impl<'a, T> System<'a> for CommitChangeSystem<T>
 where
     T: Component,
-    T: Changeset,
+    T: ChangeSet,
+    T: Mask,
 {
     type SystemData = (WriteStorage<'a, T>,);
 
@@ -55,6 +57,7 @@ where
             if !data.is_dirty() {
                 continue;
             }
+            todo!()
         }
         T::clear_storage_dirty();
     }

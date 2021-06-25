@@ -317,6 +317,8 @@ impl Generator {
         let mut names = Vec::new();
         let mut files = Vec::new();
         let mut storages = Vec::new();
+        let mut indexes = Vec::new();
+        let mut index = 0usize;
         for (f, cf) in &configs {
             let mod_name = format_ident!("{}", f.file_stem().unwrap().to_str().unwrap());
             mods.push(mod_name.clone());
@@ -325,6 +327,10 @@ impl Generator {
                     files.push(mod_name.clone());
                     names.push(format_ident!("{}", c.name));
                     storages.push(component.to_rust_type());
+                    indexes.push({
+                        index += 1;
+                        index - 1
+                    });
                 }
             }
         }
@@ -334,13 +340,14 @@ impl Generator {
 
             use specs::{
                 Component, DefaultVecStorage, FlaggedStorage, HashMapStorage, NullStorage,
-                VecStorage,
+                VecStorage
             };
             use std::{
                 any::Any,
                 ops::{Deref, DerefMut},
             };
             use protobuf::Message;
+            use ecs_engine::ChangeSet;
 
             #[derive(Debug, Default)]
             pub struct Type<T:Default> {
@@ -372,6 +379,12 @@ impl Generator {
             #(
                 impl Component for Type<#files::#names> {
                     type Storage = #storages;
+                }
+
+                impl ChangeSet for Type<#files::#names> {
+                    fn index() -> usize {
+                        #indexes
+                    }
                 }
 
                 pub type #names = Type<#files::#names>;
