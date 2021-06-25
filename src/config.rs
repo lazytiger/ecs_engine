@@ -131,6 +131,7 @@ pub enum Error {
     Ron(ron::Error, PathBuf),
     DuplicateFieldNumber(String),
     DuplicateCmd,
+    ComponentListUsed(PathBuf, String),
 }
 
 fn read_files(input_dir: PathBuf) -> std::io::Result<Vec<PathBuf>> {
@@ -289,6 +290,15 @@ impl Generator {
         proto_dir.push("components");
 
         let configs = Self::parse_config(config_dir)?;
+        for (path, cf) in &configs {
+            for config in &cf.configs {
+                for f in &config.fields {
+                    if let DataType::List(_) = f.r#type {
+                        return Err(Error::ComponentListUsed(path.clone(), config.name.clone()));
+                    }
+                }
+            }
+        }
 
         Self::gen_messages(&configs, proto_dir.clone(), true)?;
         Self::gen_protos(proto_dir, self.component_dir.clone())?;
