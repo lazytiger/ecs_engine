@@ -1,6 +1,7 @@
 use protobuf::Mask;
 use std::{
-    ops::{Deref, DerefMut},
+    collections::HashMap,
+    ops::{BitOrAssign, Deref, DerefMut},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -35,10 +36,31 @@ pub trait ChangeSet {
     }
 }
 
+#[derive(Default)]
+pub struct DataSetMask {
+    mask: u64,
+    children: HashMap<usize, DataSetMask>,
+}
+
+impl DataSetMask {
+    pub fn clear(&mut self) {
+        self.mask = 0;
+        for (_, v) in self.children.iter_mut() {
+            v.clear();
+        }
+    }
+}
+
+impl BitOrAssign for DataSetMask {
+    fn bitor_assign(&mut self, rhs: Self) {
+        todo!()
+    }
+}
+
 pub struct DataSet<T> {
     data: T,
-    mask_db: u64,
-    mask_ct: u64,
+    mask_ct: DataSetMask,
+    mask_db: DataSetMask,
 }
 
 impl<T> Deref for DataSet<T> {
@@ -63,25 +85,29 @@ where
     pub fn new(data: T) -> Self {
         Self {
             data,
-            mask_ct: 0,
-            mask_db: 0,
+            mask_ct: Default::default(),
+            mask_db: Default::default(),
         }
     }
 
     fn commit(&mut self) {
-        self.mask_db |= self.mask();
-        self.mask_ct |= self.mask();
+        //self.mask_db |= self.mask(); FIXME
+        //self.mask_ct |= self.mask(); FIXME
     }
 
     pub fn encode_db(&mut self) -> Vec<u8> {
         self.commit();
-        let data = self.encode(self.mask_db);
-        self.mask_db = 0;
+        let data = self.encode(1);
         data
     }
 
-    fn encode(&mut self, mask: u64) -> Vec<u8> {
-        *self.data.mask_mut() = mask;
+    fn encode(&mut self, typ: u8) -> Vec<u8> {
+        //*self.data.mask_mut() = mask; FIXME
+        let mask = if typ == 1 {
+            &mut self.mask_db
+        } else {
+            &mut self.mask_ct
+        };
         let data = match self.data.write_to_bytes() {
             Err(err) => {
                 log::error!("encode failed {}", err);
@@ -89,14 +115,15 @@ where
             }
             Ok(data) => data,
         };
+        mask.clear();
         self.data.clear_mask();
         data
     }
 
     pub fn encode_ct(&mut self) -> Vec<u8> {
         self.commit();
-        let data = self.encode(self.mask_ct);
-        self.mask_ct = 0;
+        let data = self.encode(0);
+        self.mask_ct.clear();
         data
     }
 
