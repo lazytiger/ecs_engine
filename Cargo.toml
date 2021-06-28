@@ -29,10 +29,11 @@ crossbeam = "0.8"
 byteorder = "1.4"
 proc-macro2 = "1.0"
 ron = "0.6"
+cfg-if = "1.0"
+notify = "4.0"
 
 [features]
 debug = []
-bounded = []
 
 [workspace]
 members = ["codegen"]

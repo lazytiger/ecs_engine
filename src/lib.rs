@@ -27,7 +27,7 @@ use crate::system::CloseSystem;
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Trait for requests enum type, it's an aggregation of all requests
 pub trait Input: Sized {
@@ -86,6 +86,8 @@ pub struct EngineBuilder {
     poll_timeout: Option<Duration>,
     max_request_size: usize,
     max_response_size: usize,
+    bounded_size: usize,
+    library_path: String,
 }
 
 impl EngineBuilder {
@@ -129,6 +131,16 @@ impl EngineBuilder {
         self
     }
 
+    pub fn with_bounded_size(mut self, bounded_size: usize) -> Self {
+        self.bounded_size = bounded_size;
+        self
+    }
+
+    pub fn with_library_path(mut self, library_path: &str) -> Self {
+        self.library_path = library_path.into();
+        self
+    }
+
     pub fn build(self) -> Result<Engine, BuildEngineError> {
         if self.address.is_none() {
             return Err(BuildEngineError::AddressNotSet);
@@ -160,6 +172,8 @@ impl Engine {
             max_request_size: 1024 * 16,
             max_response_size: 1024 * 16,
             poll_timeout: None,
+            bounded_size: 0,
+            library_path: Default::default(),
         }
     }
 
@@ -177,14 +191,20 @@ impl Engine {
             self.builder.poll_timeout,
             self.builder.max_request_size,
             self.builder.max_response_size,
+            self.builder.bounded_size,
         );
         let mut world = World::new();
         world.insert(sender.clone());
         world.register::<NetToken>();
 
-        let dm = DynamicManager::default();
+        let dm = DynamicManager::new(self.builder.library_path.clone());
         let mut builder = DispatcherBuilder::new();
         builder.add_thread_local(InputSystem::new(receiver, sender.clone()));
+        cfg_if::cfg_if! {
+            if #[cfg(feature="debug")] {
+                builder.add_thread_local(crate::system::FsNotifySystem::new(self.builder.library_path.clone(), false));
+            }
+        }
         builder.add(CloseSystem::<O>::new(), "close", &[]);
         setup(&mut world, &mut builder, &dm);
 
@@ -209,5 +229,15 @@ impl Engine {
                 sleep(self.sleep - elapsed);
             }
         }
+    }
+}
+
+pub fn unix_timestamp() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Err(err) => {
+            log::error!("get unix timestamp failed:{}", err);
+            0
+        }
+        Ok(d) => d.as_secs(),
     }
 }

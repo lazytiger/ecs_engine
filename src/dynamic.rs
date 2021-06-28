@@ -1,22 +1,28 @@
 use crate::{
     dlog::{log_param, LogParam},
-    Symbol,
+    unix_timestamp, Symbol,
 };
 use std::{
     collections::HashMap,
+    ffi::OsString,
+    path::PathBuf,
     sync::{Arc, RwLock},
 };
 
 pub struct Library {
     name: String,
+    root: OsString,
     lib: Option<libloading::Library>,
     generation: usize,
 }
 
 impl Library {
-    pub fn new(name: String) -> Library {
+    pub fn new(name: String, r: String) -> Library {
+        let mut root = OsString::new();
+        root.push(r);
         let mut lib = Library {
             name,
+            root,
             lib: None,
             generation: 0,
         };
@@ -49,9 +55,22 @@ impl Library {
     }
 
     pub fn reload(&mut self) {
+        let mut path = self.root.clone();
         let name = libloading::library_filename(self.name.as_str());
-        log::debug!("loading library {:?}", name);
-        match unsafe { libloading::Library::new(name) } {
+        path.push(name);
+        cfg_if::cfg_if! {
+            if #[cfg(feature="debug")] {
+                let original_path = path.clone();
+                path.push(format!(".{}", unix_timestamp()));
+                if let Err(err) = std::fs::copy(original_path.clone(), path.clone()) {
+                    log::error!("copy dll file from {:?} to {:?} failed:{}", original_path, path, err);
+                    return;
+                }
+            }
+        };
+
+        log::debug!("loading library {:?}", path);
+        match unsafe { libloading::Library::new(path) } {
             Ok(lib) => {
                 if let Some(olib) = self.lib.take() {
                     if let Err(err) = olib.close() {
@@ -77,9 +96,17 @@ impl Library {
 #[derive(Default)]
 pub struct DynamicManager {
     libraries: RwLock<HashMap<String, Arc<Library>>>,
+    library_path: String,
 }
 
 impl DynamicManager {
+    pub fn new(library_path: String) -> Self {
+        Self {
+            libraries: Default::default(),
+            library_path,
+        }
+    }
+
     pub fn get(&self, lib: &String) -> Arc<Library> {
         {
             if let Some(lib) = self.libraries.read().unwrap().get(lib) {
@@ -88,7 +115,7 @@ impl DynamicManager {
         }
 
         {
-            let nlib = Arc::new(Library::new(lib.clone()));
+            let nlib = Arc::new(Library::new(lib.clone(), self.library_path.clone()));
             self.libraries
                 .write()
                 .unwrap()

@@ -5,10 +5,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(feature = "bounded")]
-use crossbeam::channel::bounded as channel;
-#[cfg(not(feature = "bounded"))]
-use crossbeam::channel::unbounded as channel;
 use crossbeam::channel::{Receiver, Sender};
 use mio::{
     event::Event,
@@ -596,6 +592,14 @@ pub fn run_network(
     }
 }
 
+fn channel<T>(bounded_size: usize) -> (Sender<T>, Receiver<T>) {
+    if bounded_size == 0 {
+        crossbeam::channel::unbounded()
+    } else {
+        crossbeam::channel::bounded(bounded_size)
+    }
+}
+
 pub fn async_run<T, O>(
     address: SocketAddr,
     idle_timeout: Duration,
@@ -604,16 +608,17 @@ pub fn async_run<T, O>(
     poll_timeout: Option<Duration>,
     max_request_size: usize,
     max_response_size: usize,
+    bounded_size: usize,
 ) -> (Receiver<RequestData<T>>, ResponseSender<O>)
 where
     T: Send + Input + 'static,
 {
     // network send data to decode, one-to-one
-    let (network_sender, network_receiver) = channel::<NetworkInputData>();
+    let (network_sender, network_receiver) = channel::<NetworkInputData>(bounded_size);
     // decode send data to ecs, one-to-one
-    let (request_sender, request_receiver) = channel::<RequestData<T>>();
+    let (request_sender, request_receiver) = channel::<RequestData<T>>(bounded_size);
     // ecs send data to network many-to-one
-    let (response_sender, response_receiver) = channel::<NetworkOutputData>();
+    let (response_sender, response_receiver) = channel::<NetworkOutputData>(bounded_size);
     let poll = Poll::new().unwrap();
     let waker = Arc::new(Waker::new(poll.registry(), ECS_SENDER).unwrap());
     rayon::spawn(move || {

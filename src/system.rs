@@ -1,16 +1,18 @@
 use crate::{
     component::Closing,
+    dynamic::Library,
     network::{RequestData, ResponseSender},
     sync::ChangeSet,
-    Input, NetToken, RequestIdent,
+    DynamicManager, Input, NetToken, RequestIdent,
 };
 use crossbeam::channel::Receiver;
+use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use protobuf::Mask;
 use specs::{
     Component, Entities, Join, LazyUpdate, Read, ReadStorage, RunNow, System, World, WorldExt,
     WriteStorage,
 };
-use std::marker::PhantomData;
+use std::{marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
 
 pub struct CommitChangeSystem<T> {
     tick_step: usize,
@@ -156,4 +158,69 @@ where
     fn setup(&mut self, world: &mut World) {
         world.register::<Closing>();
     }
+}
+
+pub struct FsNotifySystem {
+    watcher: RecommendedWatcher,
+    receiver: std::sync::mpsc::Receiver<DebouncedEvent>,
+}
+
+impl FsNotifySystem {
+    pub fn new(path: String, recursive: bool) -> FsNotifySystem {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut watcher =
+            notify::watcher(sender, Duration::from_secs(2)).expect("create FsNotify failed");
+        watcher
+            .watch(
+                path,
+                if recursive {
+                    RecursiveMode::Recursive
+                } else {
+                    RecursiveMode::NonRecursive
+                },
+            )
+            .expect("watch FsNotify failed");
+        Self { watcher, receiver }
+    }
+}
+
+impl<'a> RunNow<'a> for FsNotifySystem {
+    fn run_now(&mut self, world: &'a World) {
+        let mut dm = world.write_resource::<DynamicManager>();
+        self.receiver.try_iter().for_each(|event| match event {
+            DebouncedEvent::Create(path) | DebouncedEvent::Write(path) => {
+                log::debug!("path:{:?} changed", path);
+                if let Some(lname) = get_library_name(path) {
+                    log::warn!("library {} updated", lname);
+                    let lib = dm.get(&lname);
+                    let lib: &mut Library = unsafe {
+                        #[allow(mutable_transmutes)]
+                        std::mem::transmute(lib.as_ref())
+                    };
+                    lib.reload();
+                }
+            }
+            DebouncedEvent::Error(err, path) => {
+                log::error!("Found error:{} in path {:?}", err, path)
+            }
+            _ => {}
+        })
+    }
+
+    fn setup(&mut self, world: &mut World) {}
+}
+
+fn get_library_name(path: PathBuf) -> Option<String> {
+    if let Some(file_name) = path.file_name() {
+        if let Some(file_name) = file_name.to_str() {
+            if file_name.starts_with(std::env::consts::DLL_PREFIX)
+                && file_name.ends_with(std::env::consts::DLL_SUFFIX)
+            {
+                let begin = std::env::consts::DLL_PREFIX.len();
+                let end = file_name.len() - std::env::consts::DLL_SUFFIX.len();
+                return Some(file_name[begin..end].into());
+            }
+        }
+    }
+    None
 }
