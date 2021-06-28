@@ -6,6 +6,7 @@ use std::{
 };
 
 use byteorder::{BigEndian, ByteOrder};
+use chrono::format::format_item;
 use derive_more::From;
 use proc_macro2::{Ident, TokenStream};
 use protobuf_codegen_pure::{Codegen, Customize};
@@ -223,7 +224,7 @@ impl Generator {
         self.gen_io_config(
             "responses",
             self.response_dir.clone(),
-            |mods, names, files, cmds| {
+            |mods, names, files, inners, cmds| {
                 quote!(
                     #(mod #mods;)*
 
@@ -234,6 +235,7 @@ impl Generator {
                     pub type SelfSender = ecs_engine::SelfSender<Response>;
 
                     #(pub use #files::#names;)*
+                    #(pub use #inners;)*
 
                     #[derive(Debug, From, Clone)]
                     pub enum Response {
@@ -319,19 +321,23 @@ impl Generator {
         let mut files = Vec::new();
         let mut storages = Vec::new();
         let mut indexes = Vec::new();
+        let mut inners = Vec::new();
         let mut index = 0usize;
         for (f, cf) in &configs {
             let mod_name = format_ident!("{}", f.file_stem().unwrap().to_str().unwrap());
             mods.push(mod_name.clone());
             for c in &cf.configs {
+                let name = format_ident!("{}", c.name);
                 if let Some(component) = &c.component {
                     files.push(mod_name.clone());
-                    names.push(format_ident!("{}", c.name));
+                    names.push(name);
                     storages.push(component.to_rust_type());
                     indexes.push({
                         index += 1;
                         index - 1
                     });
+                } else {
+                    inners.push(quote!(#mod_name::#name));
                 }
             }
         }
@@ -349,6 +355,7 @@ impl Generator {
             };
             use protobuf::Message;
             use ecs_engine::ChangeSet;
+            #(pub use #inners;)*
 
             #[derive(Debug, Default)]
             pub struct Type<T:Default> {
@@ -451,7 +458,7 @@ impl Generator {
 
     fn gen_io_config<F>(&self, config_type: &str, dir: PathBuf, codegen: F) -> Result<(), Error>
     where
-        F: Fn(Vec<Ident>, Vec<Ident>, Vec<Ident>, Vec<u32>) -> String,
+        F: Fn(Vec<Ident>, Vec<Ident>, Vec<Ident>, Vec<TokenStream>, Vec<u32>) -> String,
     {
         let mut config_dir = self.config_dir.clone();
         config_dir.push(config_type);
@@ -468,16 +475,19 @@ impl Generator {
         let mut mods = Vec::new();
         let mut names = Vec::new();
         let mut files = Vec::new();
+        let mut inners = Vec::new();
         for (f, cf) in &configs {
             let mod_name = format_ident!("{}", f.file_stem().unwrap().to_str().unwrap());
             mods.push(mod_name.clone());
             for c in &cf.configs {
+                let name = format_ident!("{}", c.name);
                 if let Some(true) = c.hide {
-                    continue;
+                    inners.push(quote!(#mod_name::#name));
+                } else {
+                    cmds.push(Self::string_to_u32(c.name.as_bytes()));
+                    files.push(mod_name.clone());
+                    names.push(name);
                 }
-                cmds.push(Self::string_to_u32(c.name.as_bytes()));
-                files.push(mod_name.clone());
-                names.push(format_ident!("{}", c.name));
             }
         }
 
@@ -488,7 +498,7 @@ impl Generator {
         if cmd_count != n_cmds.len() {
             return Err(Error::DuplicateCmd);
         }
-        let data = codegen(mods, names, files, cmds);
+        let data = codegen(mods, names, files, inners, cmds);
 
         let mut name = dir.clone();
         name.push("mod.rs");
@@ -506,7 +516,7 @@ impl Generator {
     }
 
     fn gen_request(&self) -> Result<(), Error> {
-        self.gen_io_config("requests", self.request_dir.clone(), | mods, names, files, cmds| {
+        self.gen_io_config("requests", self.request_dir.clone(), | mods, names, files,inners, cmds| {
             quote!(
             #(mod #mods;)*
 
@@ -518,6 +528,7 @@ impl Generator {
             use crate::responses::Response;
 
             #(pub type #names = HashComponent<#files::#names>;)*
+            #(pub use #inners;)*
 
             #[derive(Debug, From)]
             pub enum Request {
