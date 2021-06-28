@@ -58,6 +58,7 @@ impl<T> DerefMut for DataSet<T> {
 impl<T> DataSet<T>
 where
     T: protobuf::Mask,
+    T: protobuf::Message,
 {
     pub fn new(data: T) -> Self {
         Self {
