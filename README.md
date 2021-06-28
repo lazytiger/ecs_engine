@@ -352,7 +352,7 @@ TBD
     ```rust
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::ProtobufResult<()> {
         let mut mask = 0u64;
-        let mut has_mask = false;
+        self.mask = 0;
         self.tests.iter_mut().for_each(|(_, v)|v.mask = 1);
         while !is.eof()? {
             let (field_number, wire_type) = is.read_tag_unpack()?;
@@ -384,17 +384,12 @@ TBD
                     let tmp = is.read_uint64()?;
                     self.mask = tmp;
                     mask |= 1 << 4;
-                    has_mask = true;
                 },
                 _ => {
                     ::protobuf::rt::read_unknown_or_skip_group(field_number, wire_type, is, self.mut_unknown_fields())?;
                 },
             };
         }
-        if !has_mask {
-            self.mask = 0;
-        }
-        let old_mask = self.mask;
         self.mask &= ! mask;
         while self.mask != 0 {
             let field_number = self.mask.trailing_zeros();
@@ -416,7 +411,6 @@ TBD
                 },
             };
         }
-        self.mask = old_mask;
         let keys:Vec<_> = self.tests.iter().filter_map(|(k, v)|if v.mask == 1 { Some(k.clone()) } else { None }).collect();
         keys.iter().for_each(|k|{self.tests.remove(k);});
         ::std::result::Result::Ok(())
