@@ -13,6 +13,14 @@ use protobuf_codegen_pure::{Codegen, Customize};
 use quote::{format_ident, quote};
 use serde_derive::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub enum SyncDirection {
+    Client,
+    Database,
+    Team,
+    Around,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum StorageType {
     Vec,
@@ -88,6 +96,7 @@ pub struct Field {
     pub name: String,
     pub r#type: DataType,
     pub index: u32,
+    pub dirs: Option<Vec<SyncDirection>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -320,25 +329,97 @@ impl Generator {
         let mut names = Vec::new();
         let mut files = Vec::new();
         let mut storages = Vec::new();
-        let mut indexes = Vec::new();
         let mut inners = Vec::new();
-        let mut index = 0usize;
+        let mut cs_codes = Vec::new();
+        let mut indexes = Vec::new();
+        let all_dirs = vec![
+            SyncDirection::Team,
+            SyncDirection::Database,
+            SyncDirection::Around,
+            SyncDirection::Client,
+        ];
         for (f, cf) in &configs {
             let mod_name = format_ident!("{}", f.file_stem().unwrap().to_str().unwrap());
             mods.push(mod_name.clone());
             for c in &cf.configs {
+                let vname = c.name.clone();
                 let name = format_ident!("{}", c.name);
                 if let Some(component) = &c.component {
                     files.push(mod_name.clone());
-                    names.push(name);
+                    names.push(name.clone());
                     storages.push(component.to_rust_type());
-                    indexes.push({
-                        index += 1;
-                        index - 1
-                    });
                 } else {
                     inners.push(quote!(#mod_name::#name));
                 }
+                indexes.push(indexes.len());
+                let mut client_mask = 0u64;
+                let mut around_mask = 0u64;
+                let mut database_mask = 0u64;
+                let mut team_mask = 0u64;
+                let mut single_numbers = Vec::new();
+                let mut single_names = Vec::new();
+                let mut map_numbers = Vec::new();
+                let mut map_names = Vec::new();
+
+                for f in &c.fields {
+                    let dirs = f.dirs.as_ref().unwrap_or(&all_dirs);
+                    let mask = 1 << (f.index as u64);
+                    for dir in dirs {
+                        match dir {
+                            SyncDirection::Client => client_mask |= mask,
+                            SyncDirection::Database => database_mask |= mask,
+                            SyncDirection::Team => team_mask |= mask,
+                            SyncDirection::Around => around_mask |= mask,
+                        }
+                    }
+                    let index = f.index as usize;
+                    match f.r#type {
+                        DataType::Custom(_) => {
+                            single_numbers.push(index);
+                            single_names.push(format_ident!("get_{}", f.name));
+                        }
+                        DataType::Map(..) => {
+                            map_numbers.push(index);
+                            map_names.push(format_ident!("get_{}", f.name));
+                        }
+                        _ => {}
+                    }
+                }
+                let cs_code = quote! {
+                    impl DirectionMask for #mod_name::#name {
+                        fn mask_by_direction(&self, dir:SyncDirection, ms: &mut MaskSet) {
+                            let mask = match dir {
+                                SyncDirection::Client => #client_mask,
+                                SyncDirection::Around => #around_mask,
+                                SyncDirection::Database => #database_mask,
+                                SyncDirection::Team => #team_mask,
+                            };
+                            ms.mask &= mask;
+                            ms.set.iter_mut().for_each(|(k, set)| {
+                                match *k {
+                                    #(
+                                        #single_numbers => {
+                                            if let Some(ms) = set.get_mut(&(0.into())) {
+                                                self.#single_names().mask_by_direction(dir, ms);
+                                            }
+                                        }
+                                    )*
+                                    #(
+                                        #map_numbers => {
+                                            self.#map_names().iter().for_each(|(k, f)|{
+                                                if let Some(ms)  = set.get_mut(&(k.clone().into()))  {
+                                                    f.mask_by_direction(dir, ms);
+                                                }
+                                            });
+                                        }
+                                    )*
+                                    _ => panic!("unknown field in {}", #vname),
+                                }
+                            })
+                        }
+                    }
+                };
+                cs_codes.push(cs_code);
             }
         }
         let data = quote!(
@@ -353,8 +434,8 @@ impl Generator {
                 any::Any,
                 ops::{Deref, DerefMut},
             };
-            use protobuf::Message;
-            use ecs_engine::ChangeSet;
+            use protobuf::{Message, MaskSet};
+            use ecs_engine::{ChangeSet, SyncDirection};
             #(pub use #inners;)*
 
             #[derive(Debug, Default)]
@@ -384,6 +465,8 @@ impl Generator {
                 }
             }
 
+
+
             #(
                 impl Component for Type<#files::#names> {
                     type Storage = #storages;
@@ -394,10 +477,14 @@ impl Generator {
                         #indexes
                     }
                 }
-
                 pub type #names = Type<#files::#names>;
             )*
 
+            pub trait DirectionMask {
+                fn mask_by_direction(&self, direction: SyncDirection, ms: &mut MaskSet);
+            }
+
+            #(#cs_codes)*
         )
         .to_string();
         let mut name = self.component_dir.clone();

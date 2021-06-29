@@ -16,7 +16,7 @@ use std::{thread::sleep, time::Duration};
 
 pub use codegen::{changeset, export, init_log, system};
 pub use component::{Closing, HashComponent, NetToken, SelfSender};
-pub use config::Generator;
+pub use config::{Generator, SyncDirection};
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
 pub use network::{RequestIdent, ResponseSender};
