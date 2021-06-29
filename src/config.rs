@@ -470,7 +470,7 @@ impl Generator {
                 team_mask: Option<MaskSet>,
             }
 
-            impl<T:Message + Default + Mask, const N:usize, const C: u32> Type<T, N, C> {
+            impl<T:Message + Default + Mask + DirectionMask, const N:usize, const C: u32> Type<T, N, C> {
                 pub fn new() ->Self {
                     let client_mask = if N & 0x1 != 0 {
                         Some(MaskSet::default())
@@ -522,13 +522,32 @@ impl Generator {
                     self.data.clear_mask();
                 }
 
-                fn encode(&mut self, index:usize) ->Vec<u8> {
-                    let mask = match index {
-                        1 => self.client_mask.as_mut(),
-                        2 => self.database_mask.as_mut(),
-                        4 => self.team_mask.as_mut(),
-                        8 => self.around_mask.as_mut(),
-                        _ => None,
+                fn encode(&mut self, dir:SyncDirection) ->Vec<u8> {
+                    let mask = match dir {
+                        SyncDirection::Client => {
+                            if let Some(mask) = &mut self.client_mask {
+                                self.data.mask_by_direction(dir, mask);
+                            }
+                            self.client_mask.as_mut()
+                        }
+                        SyncDirection::Database =>  {
+                            if let Some(mask) = &mut self.database_mask {
+                                self.data.mask_by_direction(dir, mask);
+                            }
+                            self.database_mask.as_mut()
+                        }
+                        SyncDirection::Team =>  {
+                            if let Some(mask) = &mut self.team_mask {
+                                self.data.mask_by_direction(dir, mask);
+                            }
+                            self.team_mask.as_mut()
+                        }
+                        SyncDirection::Around => {
+                            if let Some(mask) = &mut self.around_mask {
+                                self.data.mask_by_direction(dir, mask);
+                            }
+                            self.around_mask.as_mut()
+                        }
                     };
                     if let Some(mask) = mask {
                         let mut data = vec![0u8; 8];
@@ -550,19 +569,35 @@ impl Generator {
                 }
 
                 pub fn encode_client(&mut self) -> Vec<u8> {
-                    self.encode(1)
+                    if N & 0x1 == 0 {
+                        unimplemented!();
+                    } else {
+                        self.encode(SyncDirection::Client)
+                    }
                 }
 
                 pub fn encode_database(&mut self) -> Vec<u8> {
-                    self.encode(2)
+                    if N & 0x02 == 0 {
+                        unimplemented!();
+                    } else {
+                        self.encode(SyncDirection::Database)
+                    }
                 }
 
                 pub fn encode_team(&mut self) -> Vec<u8> {
-                    self.encode(4)
+                    if N & 0x04 == 0 {
+                        unimplemented!();
+                    } else {
+                        self.encode(SyncDirection::Team)
+                    }
                 }
 
                 pub fn encode_around(&mut self) -> Vec<u8> {
-                    self.encode(8)
+                    if N & 0x08 == 0 {
+                        unimplemented!();
+                    } else {
+                        self.encode(SyncDirection::Around)
+                    }
                 }
             }
 

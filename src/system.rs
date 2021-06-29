@@ -14,57 +14,6 @@ use specs::{
 };
 use std::{marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
 
-pub struct CommitChangeSystem<T> {
-    tick_step: usize,
-    counter: usize,
-    _phantom: PhantomData<T>,
-}
-
-impl<T> CommitChangeSystem<T> {
-    fn new(tick_step: usize) -> Self {
-        Self {
-            tick_step,
-            counter: 0,
-            _phantom: Default::default(),
-        }
-    }
-}
-
-impl<T> Default for CommitChangeSystem<T> {
-    fn default() -> Self {
-        Self::new(1)
-    }
-}
-
-impl<'a, T> System<'a> for CommitChangeSystem<T>
-where
-    T: Component,
-    T: ChangeSet,
-    T: Mask,
-{
-    type SystemData = (WriteStorage<'a, T>,);
-
-    fn run(&mut self, (data,): Self::SystemData) {
-        self.counter += 1;
-        if self.counter != self.tick_step {
-            return;
-        } else {
-            self.counter = 0;
-        }
-        if !T::is_storage_dirty() {
-            return;
-        }
-
-        for (data,) in (&data,).join() {
-            if !data.is_dirty() {
-                continue;
-            }
-            todo!()
-        }
-        T::clear_storage_dirty();
-    }
-}
-
 pub struct InputSystem<I, O> {
     receiver: Receiver<RequestData<I>>,
     sender: ResponseSender<O>,
