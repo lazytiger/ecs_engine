@@ -351,6 +351,7 @@ impl Generator {
         let mut cs_codes = Vec::new();
         let mut indexes = Vec::new();
         let mut ns = Vec::new();
+        let mut cmds = Vec::new();
         let all_dirs = vec![
             SyncDirection::Team,
             SyncDirection::Database,
@@ -368,6 +369,7 @@ impl Generator {
                     names.push(name.clone());
                     storages.push(component.to_rust_type());
                     ns.push(c.get_dir_mask());
+                    cmds.push(Self::string_to_u32(vname.as_bytes()));
                 } else {
                     inners.push(quote!(#mod_name::#name));
                 }
@@ -456,10 +458,11 @@ impl Generator {
             };
             use protobuf::{Message, MaskSet, Mask};
             use ecs_engine::{ChangeSet, SyncDirection};
+            use byteorder::{BigEndian, ByteOrder};
             #(pub use #inners;)*
 
             #[derive(Debug, Default)]
-            pub struct Type<T:Default, const N: usize> {
+            pub struct Type<T:Default, const N: usize, const C: u32> {
                 data: T,
                 database_mask: Option<MaskSet>,
                 client_mask: Option<MaskSet>,
@@ -467,7 +470,7 @@ impl Generator {
                 team_mask: Option<MaskSet>,
             }
 
-            impl<T:Message + Default + Mask, const N:usize> Type<T, N> {
+            impl<T:Message + Default + Mask, const N:usize, const C: u32> Type<T, N, C> {
                 pub fn new() ->Self {
                     let client_mask = if N & 0x1 != 0 {
                         Some(MaskSet::default())
@@ -528,16 +531,18 @@ impl Generator {
                         _ => None,
                     };
                     if let Some(mask) = mask {
+                        let mut data = vec![0u8; 8];
                         self.data.set_mask(mask);
-                        let data = match self.data.write_to_bytes() {
-                            Err(err) => {
-                                log::error!("encode data failed:{}", err);
-                                Vec::new()
-                            },
-                            Ok(v) => v,
-                        };
+                        if let Err(err) = self.data.write_to_vec(&mut data) {
+                            log::error!("encode data failed:{}", err);
+                            return Vec::new();
+                        }
                         self.data.clear_mask();
                         mask.clear();
+                        let length = (data.len() - 4) as u32;
+                        let header = data.as_mut_slice();
+                        BigEndian::write_u32(header, length);
+                        BigEndian::write_u32(&mut header[4..], C);
                         data
                     } else {
                         Vec::new()
@@ -561,7 +566,7 @@ impl Generator {
                 }
             }
 
-            impl<T:Default, const N:usize> Deref for Type<T, N> {
+            impl<T:Default, const N:usize, const C:u32> Deref for Type<T, N, C> {
                 type Target = T;
 
                 fn deref(&self) -> &Self::Target {
@@ -569,23 +574,23 @@ impl Generator {
                 }
             }
 
-            impl<T:Default, const N:usize> DerefMut for Type<T, N> {
+            impl<T:Default, const N:usize, const C:u32> DerefMut for Type<T, N, C> {
                 fn deref_mut(&mut self) -> &mut Self::Target {
                     &mut self.data
                 }
             }
 
             #(
-                impl Component for Type<#files::#names, #ns> {
+                impl Component for Type<#files::#names, #ns, #cmds> {
                     type Storage = #storages;
                 }
 
-                impl ChangeSet for Type<#files::#names, #ns> {
+                impl ChangeSet for Type<#files::#names, #ns, #cmds> {
                     fn index() -> usize {
                         #indexes
                     }
                 }
-                pub type #names = Type<#files::#names, #ns>;
+                pub type #names = Type<#files::#names, #ns, #cmds>;
             )*
 
             pub trait DirectionMask {
