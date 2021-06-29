@@ -1,10 +1,4 @@
-use crate::config::SyncDirection;
-use protobuf::{Mask, MaskSet};
-use std::{
-    collections::HashMap,
-    ops::{BitOrAssign, Deref, DerefMut},
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_COMPONENTS: usize = 1024;
 

@@ -5,7 +5,6 @@ use crate::{
 use std::{
     collections::HashMap,
     ffi::OsString,
-    path::PathBuf,
     sync::{Arc, RwLock},
 };
 

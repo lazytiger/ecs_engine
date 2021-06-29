@@ -986,10 +986,6 @@ pub fn changeset(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .iter()
         .map(|f| f.ident.clone().unwrap())
         .collect();
-    let ident_muts: Vec<_> = idents
-        .iter()
-        .map(|id| format_ident!("{}_mut", id))
-        .collect();
     let indexes = 0..idents.len();
     let types: Vec<_> = input.fields.iter().map(|f| f.ty.clone()).collect();
     let types_ref: Vec<_> = types

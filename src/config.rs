@@ -6,7 +6,6 @@ use std::{
 };
 
 use byteorder::{BigEndian, ByteOrder};
-use chrono::format::format_item;
 use derive_more::From;
 use proc_macro2::{Ident, TokenStream};
 use protobuf_codegen_pure::{Codegen, Customize};
