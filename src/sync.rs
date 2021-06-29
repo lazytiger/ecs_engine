@@ -1,3 +1,4 @@
+use crate::SyncDirection;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_COMPONENTS: usize = 1024;
@@ -26,4 +27,12 @@ pub trait ChangeSet {
     fn is_storage_dirty() -> bool {
         MODS[Self::index()].load(Ordering::Relaxed)
     }
+}
+
+pub trait DataSet {
+    fn commit(&mut self);
+
+    fn encode(&mut self, dir: SyncDirection) -> Vec<u8>;
+
+    fn is_dirty(&self) -> bool;
 }

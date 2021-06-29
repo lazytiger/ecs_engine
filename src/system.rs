@@ -1,9 +1,9 @@
 use crate::{
     component::Closing,
     dynamic::Library,
-    network::{RequestData, ResponseSender},
+    network::{BytesSender, RequestData, ResponseSender},
     sync::ChangeSet,
-    DynamicManager, Input, NetToken, RequestIdent,
+    DataSet, DynamicManager, Input, NetToken, RequestIdent, SyncDirection,
 };
 use crossbeam::channel::Receiver;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
@@ -172,4 +172,63 @@ fn get_library_name(path: PathBuf) -> Option<String> {
         }
     }
     None
+}
+
+pub struct CommitChangeSystem<T> {
+    tick_step: usize,
+    counter: usize,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> CommitChangeSystem<T> {
+    fn new(tick_step: usize) -> Self {
+        Self {
+            tick_step,
+            counter: 0,
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<T> Default for CommitChangeSystem<T> {
+    fn default() -> Self {
+        Self::new(1)
+    }
+}
+
+impl<'a, T> System<'a> for CommitChangeSystem<T>
+where
+    T: Component,
+    T: ChangeSet,
+    T: DataSet,
+{
+    type SystemData = (
+        WriteStorage<'a, T>,
+        ReadStorage<'a, NetToken>,
+        Read<'a, BytesSender>,
+    );
+
+    fn run(&mut self, (mut data, token, sender): Self::SystemData) {
+        self.counter += 1;
+        if self.counter != self.tick_step {
+            return;
+        } else {
+            self.counter = 0;
+        }
+        if !T::is_storage_dirty() {
+            return;
+        }
+
+        for (data, token) in (&mut data, &token).join() {
+            if !data.is_dirty() {
+                continue;
+            }
+            data.commit();
+            let bytes = data.encode(SyncDirection::Client);
+            if !bytes.is_empty() {
+                sender.send_bytes(token.token(), bytes);
+            }
+        }
+        T::clear_storage_dirty();
+    }
 }

@@ -457,7 +457,7 @@ impl Generator {
                 ops::{Deref, DerefMut},
             };
             use protobuf::{Message, MaskSet, Mask};
-            use ecs_engine::{ChangeSet, SyncDirection};
+            use ecs_engine::{ChangeSet, SyncDirection, DataSet};
             use byteorder::{BigEndian, ByteOrder};
             #(pub use #inners;)*
 
@@ -470,7 +470,7 @@ impl Generator {
                 team_mask: Option<MaskSet>,
             }
 
-            impl<T:Message + Default + Mask + DirectionMask, const N:usize, const C: u32> Type<T, N, C> {
+            impl<T:Message + Default, const N:usize, const C: u32> Type<T, N, C> {
                 pub fn new() ->Self {
                     let client_mask = if N & 0x1 != 0 {
                         Some(MaskSet::default())
@@ -501,7 +501,10 @@ impl Generator {
                     }
                 }
 
-                pub fn commit(&mut self) {
+            }
+
+            impl<T:Message + Default + Mask + DirectionMask, const N:usize, const C:u32> DataSet for Type<T, N, C> {
+                fn commit(&mut self) {
                     let mut ms = None;
                     if self.client_mask.is_some() {
                         let ms = ms.get_or_insert_with(||self.data.mask_set());
@@ -527,77 +530,54 @@ impl Generator {
                         SyncDirection::Client => {
                             if let Some(mask) = &mut self.client_mask {
                                 self.data.mask_by_direction(dir, mask);
+                                mask
+                            } else {
+                                 unimplemented!();
                             }
-                            self.client_mask.as_mut()
                         }
                         SyncDirection::Database =>  {
                             if let Some(mask) = &mut self.database_mask {
                                 self.data.mask_by_direction(dir, mask);
+                                mask
+                            } else {
+                                 unimplemented!();
                             }
-                            self.database_mask.as_mut()
                         }
                         SyncDirection::Team =>  {
                             if let Some(mask) = &mut self.team_mask {
                                 self.data.mask_by_direction(dir, mask);
+                                mask
+                            } else {
+                                 unimplemented!();
                             }
-                            self.team_mask.as_mut()
                         }
                         SyncDirection::Around => {
                             if let Some(mask) = &mut self.around_mask {
                                 self.data.mask_by_direction(dir, mask);
+                                mask
+                            } else {
+                                 unimplemented!();
                             }
-                            self.around_mask.as_mut()
                         }
                     };
-                    if let Some(mask) = mask {
-                        let mut data = vec![0u8; 8];
-                        self.data.set_mask(mask);
-                        if let Err(err) = self.data.write_to_vec(&mut data) {
-                            log::error!("encode data failed:{}", err);
-                            return Vec::new();
-                        }
-                        self.data.clear_mask();
-                        mask.clear();
+                    let mut data = vec![0u8; 8];
+                    self.data.set_mask(mask);
+                    if let Err(err) = self.data.write_to_vec(&mut data) {
+                        log::error!("encode data failed:{}", err);
+                        data.clear();
+                    } else {
                         let length = (data.len() - 4) as u32;
                         let header = data.as_mut_slice();
                         BigEndian::write_u32(header, length);
                         BigEndian::write_u32(&mut header[4..], C);
-                        data
-                    } else {
-                        Vec::new()
                     }
+                    self.data.clear_mask();
+                    mask.clear();
+                    data
                 }
 
-                pub fn encode_client(&mut self) -> Vec<u8> {
-                    if N & 0x1 == 0 {
-                        unimplemented!();
-                    } else {
-                        self.encode(SyncDirection::Client)
-                    }
-                }
-
-                pub fn encode_database(&mut self) -> Vec<u8> {
-                    if N & 0x02 == 0 {
-                        unimplemented!();
-                    } else {
-                        self.encode(SyncDirection::Database)
-                    }
-                }
-
-                pub fn encode_team(&mut self) -> Vec<u8> {
-                    if N & 0x04 == 0 {
-                        unimplemented!();
-                    } else {
-                        self.encode(SyncDirection::Team)
-                    }
-                }
-
-                pub fn encode_around(&mut self) -> Vec<u8> {
-                    if N & 0x08 == 0 {
-                        unimplemented!();
-                    } else {
-                        self.encode(SyncDirection::Around)
-                    }
+                fn is_dirty(&self) -> bool {
+                    self.data.is_dirty()
                 }
             }
 

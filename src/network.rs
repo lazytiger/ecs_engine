@@ -16,7 +16,7 @@ use specs::Entity;
 
 use crate::{Input, Output};
 use byteorder::{BigEndian, ByteOrder};
-use std::marker::PhantomData;
+use std::{cmp::max, marker::PhantomData, ops::Deref};
 
 /// 请求标识
 #[derive(Clone)]
@@ -657,15 +657,14 @@ where
     })
 }
 
-#[derive(Default, Clone)]
-pub struct ResponseSender<T> {
+#[derive(Clone, Default)]
+pub struct BytesSender {
     sender: Option<Sender<NetworkOutputData>>,
     waker: Option<Arc<Waker>>,
     max_response_size: usize,
-    _phantom: PhantomData<T>,
 }
 
-impl<T> ResponseSender<T> {
+impl BytesSender {
     pub fn new(
         sender: Sender<NetworkOutputData>,
         waker: Arc<Waker>,
@@ -675,7 +674,6 @@ impl<T> ResponseSender<T> {
             sender: Some(sender),
             waker: Some(waker),
             max_response_size,
-            _phantom: Default::default(),
         }
     }
 
@@ -702,22 +700,62 @@ impl<T> ResponseSender<T> {
             log::error!("wake poll failed:{}", err);
         }
     }
+
+    pub fn broadcast_bytes(&self, tokens: Vec<Token>, bytes: Vec<u8>) {
+        if bytes.len() > self.max_response_size {
+            log::error!(
+                "response size:{} is greater than {}",
+                bytes.len(),
+                self.max_response_size
+            );
+        }
+        self.broadcast(tokens, Response::Data(bytes));
+    }
+
+    pub fn send_bytes(&self, token: Token, bytes: Vec<u8>) {
+        self.broadcast_bytes(vec![token], bytes);
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct ResponseSender<T> {
+    pub sender: BytesSender,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> ResponseSender<T> {
+    pub fn new(
+        sender: Sender<NetworkOutputData>,
+        waker: Arc<Waker>,
+        max_response_size: usize,
+    ) -> Self {
+        Self {
+            sender: BytesSender::new(sender, waker, max_response_size),
+            _phantom: Default::default(),
+        }
+    }
+
+    pub fn flush(&self) {
+        self.sender.flush();
+    }
 }
 
 impl<T: Output> ResponseSender<T> {
     pub fn broadcast_data<D: Into<T>>(&self, tokens: Vec<Token>, data: D) {
         let data = data.into().encode();
-        if data.len() > self.max_response_size {
-            log::error!(
-                "response size:{} is greater than {}",
-                data.len(),
-                self.max_response_size
-            );
-        }
-        self.broadcast(tokens, Response::Data(data));
+        self.sender.broadcast_bytes(tokens, data);
     }
 
     pub fn send_data<D: Into<T>>(&self, token: Token, data: D) {
-        self.broadcast_data(vec![token], data);
+        let data = data.into().encode();
+        self.sender.broadcast_bytes(vec![token], data);
+    }
+}
+
+impl<T> Deref for ResponseSender<T> {
+    type Target = BytesSender;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sender
     }
 }

@@ -20,7 +20,8 @@ pub use config::{Generator, SyncDirection};
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
 pub use network::{RequestIdent, ResponseSender};
-pub use sync::ChangeSet;
+pub use sync::{ChangeSet, DataSet};
+pub use system::CommitChangeSystem;
 
 use crate::system::CloseSystem;
 #[cfg(target_os = "windows")]
@@ -195,6 +196,7 @@ impl Engine {
         );
         let mut world = World::new();
         world.insert(sender.clone());
+        world.insert(sender.deref().clone());
         world.register::<NetToken>();
 
         let dm = DynamicManager::new(self.builder.library_path.clone());
@@ -223,7 +225,6 @@ impl Engine {
             dispatcher.dispatch_par(&world);
             world.maintain();
             // notify network
-            sender.flush();
             let elapsed = start_time.elapsed();
             if elapsed < self.sleep {
                 sleep(self.sleep - elapsed);
