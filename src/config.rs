@@ -119,6 +119,25 @@ impl Config {
             0
         }
     }
+
+    fn get_dir_mask(&self) -> usize {
+        let mut mask = 0usize;
+        for f in &self.fields {
+            if let Some(dirs) = &f.dirs {
+                for dir in dirs {
+                    match dir {
+                        SyncDirection::Client => mask |= 1,
+                        SyncDirection::Database => mask |= 1 << 1,
+                        SyncDirection::Team => mask |= 1 << 2,
+                        SyncDirection::Around => mask |= 1 << 3,
+                    }
+                }
+            } else {
+                return 0x0f;
+            }
+        }
+        mask
+    }
 }
 
 #[derive(Default)]
@@ -331,6 +350,7 @@ impl Generator {
         let mut inners = Vec::new();
         let mut cs_codes = Vec::new();
         let mut indexes = Vec::new();
+        let mut ns = Vec::new();
         let all_dirs = vec![
             SyncDirection::Team,
             SyncDirection::Database,
@@ -347,6 +367,7 @@ impl Generator {
                     files.push(mod_name.clone());
                     names.push(name.clone());
                     storages.push(component.to_rust_type());
+                    ns.push(c.get_dir_mask());
                 } else {
                     inners.push(quote!(#mod_name::#name));
                 }
@@ -433,24 +454,114 @@ impl Generator {
                 any::Any,
                 ops::{Deref, DerefMut},
             };
-            use protobuf::{Message, MaskSet};
+            use protobuf::{Message, MaskSet, Mask};
             use ecs_engine::{ChangeSet, SyncDirection};
             #(pub use #inners;)*
 
             #[derive(Debug, Default)]
-            pub struct Type<T:Default> {
+            pub struct Type<T:Default, const N: usize> {
                 data: T,
+                database_mask: Option<MaskSet>,
+                client_mask: Option<MaskSet>,
+                around_mask: Option<MaskSet>,
+                team_mask: Option<MaskSet>,
             }
 
-            impl<T:Message + Default> Type<T> {
-                fn new() ->Self {
+            impl<T:Message + Default + Mask, const N:usize> Type<T, N> {
+                pub fn new() ->Self {
+                    let client_mask = if N & 0x1 != 0 {
+                        Some(MaskSet::default())
+                    } else {
+                        None
+                    };
+                    let database_mask = if N & 0x02 != 0 {
+                        Some(MaskSet::default())
+                    } else {
+                        None
+                    };
+                    let team_mask = if N & 0x04 != 0 {
+                        Some(MaskSet::default())
+                    } else {
+                        None
+                    };
+                    let around_mask = if N & 0x08 != 0 {
+                        Some(MaskSet::default())
+                    } else {
+                        None
+                    };
                     Self {
                         data:T::new(),
+                        client_mask,
+                        database_mask,
+                        team_mask,
+                        around_mask,
                     }
+                }
+
+                pub fn commit(&mut self) {
+                    let mut ms = None;
+                    if self.client_mask.is_some() {
+                        let ms = ms.get_or_insert_with(||self.data.mask_set());
+                        *self.client_mask.as_mut().unwrap() |= ms;
+                    }
+                    if self.database_mask.is_some() {
+                        let ms = ms.get_or_insert_with(||self.data.mask_set());
+                        *self.database_mask.as_mut().unwrap() |= ms;
+                    }
+                    if self.team_mask.is_some() {
+                        let ms = ms.get_or_insert_with(||self.data.mask_set());
+                        *self.team_mask.as_mut().unwrap() |= ms;
+                    }
+                    if self.around_mask.is_some() {
+                        let ms = ms.get_or_insert_with(||self.data.mask_set());
+                        *self.around_mask.as_mut().unwrap() |= ms;
+                    }
+                    self.data.clear_mask();
+                }
+
+                fn encode(&mut self, index:usize) ->Vec<u8> {
+                    let mask = match index {
+                        1 => self.client_mask.as_mut(),
+                        2 => self.database_mask.as_mut(),
+                        4 => self.team_mask.as_mut(),
+                        8 => self.around_mask.as_mut(),
+                        _ => None,
+                    };
+                    if let Some(mask) = mask {
+                        self.data.set_mask(mask);
+                        let data = match self.data.write_to_bytes() {
+                            Err(err) => {
+                                log::error!("encode data failed:{}", err);
+                                Vec::new()
+                            },
+                            Ok(v) => v,
+                        };
+                        self.data.clear_mask();
+                        mask.clear();
+                        data
+                    } else {
+                        Vec::new()
+                    }
+                }
+
+                pub fn encode_client(&mut self) -> Vec<u8> {
+                    self.encode(1)
+                }
+
+                pub fn encode_database(&mut self) -> Vec<u8> {
+                    self.encode(2)
+                }
+
+                pub fn encode_team(&mut self) -> Vec<u8> {
+                    self.encode(4)
+                }
+
+                pub fn encode_around(&mut self) -> Vec<u8> {
+                    self.encode(8)
                 }
             }
 
-            impl<T:Default> Deref for Type<T> {
+            impl<T:Default, const N:usize> Deref for Type<T, N> {
                 type Target = T;
 
                 fn deref(&self) -> &Self::Target {
@@ -458,25 +569,23 @@ impl Generator {
                 }
             }
 
-            impl<T:Default> DerefMut for Type<T> {
+            impl<T:Default, const N:usize> DerefMut for Type<T, N> {
                 fn deref_mut(&mut self) -> &mut Self::Target {
                     &mut self.data
                 }
             }
 
-
-
             #(
-                impl Component for Type<#files::#names> {
+                impl Component for Type<#files::#names, #ns> {
                     type Storage = #storages;
                 }
 
-                impl ChangeSet for Type<#files::#names> {
+                impl ChangeSet for Type<#files::#names, #ns> {
                     fn index() -> usize {
                         #indexes
                     }
                 }
-                pub type #names = Type<#files::#names>;
+                pub type #names = Type<#files::#names, #ns>;
             )*
 
             pub trait DirectionMask {
