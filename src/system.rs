@@ -1,8 +1,8 @@
 use crate::{
-    component::Closing,
+    component::{Closing, Scene, Team},
     dynamic::Library,
     network::{BytesSender, RequestData, ResponseSender},
-    sync::{ChangeSet, Team},
+    sync::ChangeSet,
     DataSet, DynamicManager, Input, NetToken, RequestIdent, SyncDirection,
 };
 use crossbeam::channel::Receiver;
@@ -12,7 +12,7 @@ use specs::{
     BitSet, Component, Entities, Join, LazyUpdate, Read, ReadExpect, ReadStorage, RunNow, System,
     World, WorldExt, WriteStorage,
 };
-use specs_hierarchy::{Hierarchy, Parent};
+use specs_hierarchy::{Hierarchy, HierarchySystem, Parent};
 use std::{marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
 
 pub struct InputSystem<I, O> {
@@ -245,3 +245,8 @@ where
         T::clear_storage_dirty();
     }
 }
+
+pub type TeamSystem = HierarchySystem<Team>;
+pub type TeamHierarchy = Hierarchy<Team>;
+pub type SceneSystem = HierarchySystem<Scene>;
+pub type SceneHierarchy = Hierarchy<Scene>;

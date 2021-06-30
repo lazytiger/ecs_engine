@@ -2,9 +2,14 @@
 use crate::{Output, ResponseSender};
 use mio::Token;
 use specs::{
-    BitSet, Component, DenseVecStorage, HashMapStorage, Join, NullStorage, ReadStorage, VecStorage,
+    storage::UnprotectedStorage, BitSet, Component, DenseVecStorage, Entity, FlaggedStorage,
+    HashMapStorage, Join, NullStorage, ReadStorage, VecStorage,
 };
-use std::ops::{Deref, DerefMut};
+use specs_hierarchy::Parent;
+use std::{
+    any::Any,
+    ops::{Deref, DerefMut},
+};
 
 macro_rules! component {
     ($storage:ident, $name:ident) => {
@@ -94,5 +99,33 @@ where
 
     pub fn send_close(&self, confirm: bool) {
         self.sender.send_close(self.token, confirm);
+    }
+}
+
+pub struct Team {
+    entity: Entity,
+}
+
+impl Component for Team {
+    type Storage = FlaggedStorage<Self, VecStorage<Self>>;
+}
+
+impl Parent for Team {
+    fn parent_entity(&self) -> Entity {
+        self.entity
+    }
+}
+
+pub struct Scene {
+    entity: Entity,
+}
+
+impl Component for Scene {
+    type Storage = FlaggedStorage<Self, VecStorage<Self>>;
+}
+
+impl Parent for Scene {
+    fn parent_entity(&self) -> Entity {
+        self.entity
     }
 }

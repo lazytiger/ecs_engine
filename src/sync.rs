@@ -38,15 +38,3 @@ pub trait DataSet {
 
     fn is_dirty(&self) -> bool;
 }
-
-#[derive(Component)]
-#[storage(VecStorage)]
-pub struct Team {
-    entity: Entity,
-}
-
-impl Parent for Team {
-    fn parent_entity(&self) -> Entity {
-        self.entity
-    }
-}
