@@ -452,14 +452,14 @@ impl Generator {
 
             use specs::{
                 Component, DefaultVecStorage, FlaggedStorage, HashMapStorage, NullStorage,
-                VecStorage, DispatcherBuilder,
+                VecStorage, DispatcherBuilder, Tracked,
             };
             use std::{
                 any::Any,
                 ops::{Deref, DerefMut},
             };
             use protobuf::{Message, MaskSet, Mask};
-            use ecs_engine::{ChangeSet, SyncDirection, DataSet, CommitChangeSystem};
+            use ecs_engine::{ChangeSet, SyncDirection, DataSet, CommitChangeSystem, SceneData};
             use byteorder::{BigEndian, ByteOrder};
             #(pub use #inners;)*
 
@@ -616,9 +616,15 @@ impl Generator {
 
             #(#cs_codes)*
 
-            pub fn setup(builder:&mut DispatcherBuilder) {
+            pub fn setup<P, S>(builder:&mut DispatcherBuilder)
+            where
+                P: Component + ecs_engine::Position + Send + Sync + 'static,
+                P::Storage: Tracked,
+                S: Component + SceneData + Send + Sync + 'static,
+                S::Storage: Tracked,
+            {
                 #(
-                    builder.add(CommitChangeSystem::<#names>::default(), #vnames, &[]);
+                    builder.add(CommitChangeSystem::<#names, P, S>::default(), #vnames, &[]);
                 )*
             }
         )

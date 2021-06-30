@@ -107,6 +107,12 @@ pub struct Member<const T: usize> {
     entity: Entity,
 }
 
+impl<const T: usize> Member<T> {
+    pub fn new(entity: Entity) -> Self {
+        Self { entity }
+    }
+}
+
 impl<const T: usize> Component for Member<T> {
     type Storage = FlaggedStorage<Self, VecStorage<Self>>;
 }

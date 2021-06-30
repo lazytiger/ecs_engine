@@ -21,9 +21,12 @@ pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
 pub use network::{RequestIdent, ResponseSender};
 pub use sync::{ChangeSet, DataSet};
-pub use system::CommitChangeSystem;
+pub use system::{
+    CommitChangeSystem, GridSystem, Position, SceneData, SceneMember, SceneSystem, TeamMember,
+    TeamSystem,
+};
 
-use crate::system::{CloseSystem, SceneSystem, TeamSystem};
+use crate::system::CloseSystem;
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
@@ -208,8 +211,7 @@ impl Engine {
             }
         }
         builder.add(CloseSystem::<O>::new(), "close", &[]);
-        builder.add(TeamSystem::new(&mut world), "team_hierarchy", &[]);
-        builder.add(SceneSystem::new(&mut world), "scene_hierarchy", &[]);
+
         setup(&mut world, &mut builder, &dm);
 
         world.insert(dm);

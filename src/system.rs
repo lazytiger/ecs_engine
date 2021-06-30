@@ -209,7 +209,7 @@ where
     type SystemData = (
         WriteStorage<'a, T>,
         ReadStorage<'a, NetToken>,
-        ReadStorage<'a, Team>,
+        ReadStorage<'a, TeamMember>,
         ReadExpect<'a, TeamHierarchy>,
         Read<'a, BytesSender>,
         Entities<'a>,
@@ -259,25 +259,31 @@ where
     }
 }
 
-pub type Team = Member<0>;
-pub type Scene = Member<1>;
-pub type TeamSystem = HierarchySystem<Team>;
-pub type TeamHierarchy = Hierarchy<Team>;
-pub type SceneSystem = HierarchySystem<Scene>;
-pub type SceneHierarchy = Hierarchy<Scene>;
+pub type TeamMember = Member<0>;
+pub type SceneMember = Member<1>;
+pub type TeamSystem = HierarchySystem<TeamMember>;
+pub type TeamHierarchy = Hierarchy<TeamMember>;
+pub type SceneSystem = HierarchySystem<SceneMember>;
+pub type SceneHierarchy = Hierarchy<SceneMember>;
 
+/// 玩家的位置信息
 pub trait Position {
+    /// x轴坐标
     fn x(&self) -> f32;
+    /// y轴坐标
     fn y(&self) -> f32;
 }
 
+/// 场景尺寸信息
 pub trait SceneData: Clone {
+    /// 场景坐标的最小xy值
     fn get_min_xy(&self) -> (f32, f32);
-
+    /// 获取场景的分块尺寸，即可以分为行列数
     fn get_size(&self) -> (i32, i32);
-
+    /// 场景分隔的正方形边长
     fn grid_size(&self) -> f32;
-
+    /// 根据位置信息计算格子索引
+    /// index = y * column + x
     fn grid_index(&self, p: &impl Position) -> usize {
         let x = p.x();
         let y = p.y();
@@ -290,7 +296,7 @@ pub trait SceneData: Clone {
         let (_, column) = self.get_size();
         (y * column + x) as usize
     }
-
+    /// 获取周围格子的索引，包括当前格子
     fn around(&self, index: usize) -> Vec<usize> {
         let mut data = Vec::new();
         let index = index as i32;
@@ -357,7 +363,7 @@ where
         &mut self,
         entities: Entities<'a>,
         positions: ReadStorage<'a, P>,
-        scene: ReadStorage<'a, Scene>,
+        scene: ReadStorage<'a, SceneMember>,
         scene_data: ReadStorage<'a, S>,
         scene_hierarchy: ReadExpect<'a, SceneHierarchy>,
     ) {
@@ -544,7 +550,7 @@ where
     type SystemData = (
         Entities<'a>,
         ReadStorage<'a, P>,
-        ReadStorage<'a, Scene>,
+        ReadStorage<'a, SceneMember>,
         ReadStorage<'a, S>,
         WriteExpect<'a, GridManager<P, S>>,
         ReadExpect<'a, SceneHierarchy>,
