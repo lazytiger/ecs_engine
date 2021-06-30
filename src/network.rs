@@ -16,7 +16,7 @@ use specs::Entity;
 
 use crate::{Input, Output};
 use byteorder::{BigEndian, ByteOrder};
-use std::{cmp::max, marker::PhantomData, ops::Deref};
+use std::{marker::PhantomData, ops::Deref};
 
 /// 请求标识
 #[derive(Clone)]

@@ -2,16 +2,17 @@ use crate::{
     component::Closing,
     dynamic::Library,
     network::{BytesSender, RequestData, ResponseSender},
-    sync::ChangeSet,
+    sync::{ChangeSet, Team},
     DataSet, DynamicManager, Input, NetToken, RequestIdent, SyncDirection,
 };
 use crossbeam::channel::Receiver;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use protobuf::Mask;
 use specs::{
-    Component, Entities, Join, LazyUpdate, Read, ReadStorage, RunNow, System, World, WorldExt,
-    WriteStorage,
+    BitSet, Component, Entities, Join, LazyUpdate, Read, ReadExpect, ReadStorage, RunNow, System,
+    World, WorldExt, WriteStorage,
 };
+use specs_hierarchy::{Hierarchy, Parent};
 use std::{marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
 
 pub struct InputSystem<I, O> {
@@ -205,10 +206,13 @@ where
     type SystemData = (
         WriteStorage<'a, T>,
         ReadStorage<'a, NetToken>,
+        ReadStorage<'a, Team>,
+        ReadExpect<'a, Hierarchy<Team>>,
         Read<'a, BytesSender>,
+        Entities<'a>,
     );
 
-    fn run(&mut self, (mut data, token, sender): Self::SystemData) {
+    fn run(&mut self, (mut data, token, teams, hteams, sender, entities): Self::SystemData) {
         self.counter += 1;
         if self.counter != self.tick_step {
             return;
@@ -219,14 +223,23 @@ where
             return;
         }
 
-        for (data, token) in (&mut data, &token).join() {
-            if !data.is_dirty() {
-                continue;
+        let mut modified = BitSet::new();
+        for (data, token, entity) in (&mut data, &token, &entities).join() {
+            if data.is_dirty() {
+                data.commit();
+                let bytes = data.encode(SyncDirection::Client);
+                if let Some(bytes) = bytes {
+                    sender.send_bytes(token.token(), bytes);
+                }
+                modified.add(entity.id());
             }
-            data.commit();
-            let bytes = data.encode(SyncDirection::Client);
-            if !bytes.is_empty() {
-                sender.send_bytes(token.token(), bytes);
+        }
+
+        for (data, _, _, team) in (&mut data, &modified, &entities, &teams).join() {
+            if let Some(bytes) = data.encode(SyncDirection::Team) {
+                let members = hteams.all_children(team.parent_entity());
+                let tokens = NetToken::tokens(&token, &members);
+                sender.broadcast_bytes(tokens, bytes);
             }
         }
         T::clear_storage_dirty();

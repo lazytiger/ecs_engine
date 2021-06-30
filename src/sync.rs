@@ -1,4 +1,6 @@
 use crate::SyncDirection;
+use specs::{Component, Entity, VecStorage};
+use specs_hierarchy::Parent;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_COMPONENTS: usize = 1024;
@@ -32,7 +34,19 @@ pub trait ChangeSet {
 pub trait DataSet {
     fn commit(&mut self);
 
-    fn encode(&mut self, dir: SyncDirection) -> Vec<u8>;
+    fn encode(&mut self, dir: SyncDirection) -> Option<Vec<u8>>;
 
     fn is_dirty(&self) -> bool;
+}
+
+#[derive(Component)]
+#[storage(VecStorage)]
+pub struct Team {
+    entity: Entity,
+}
+
+impl Parent for Team {
+    fn parent_entity(&self) -> Entity {
+        self.entity
+    }
 }

@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 use crate::{Output, ResponseSender};
 use mio::Token;
-use specs::{Component, DenseVecStorage, HashMapStorage, NullStorage, VecStorage};
+use specs::{
+    BitSet, Component, DenseVecStorage, HashMapStorage, Join, NullStorage, ReadStorage, VecStorage,
+};
 use std::ops::{Deref, DerefMut};
 
 macro_rules! component {
@@ -48,6 +50,13 @@ pub type NetToken = VecComponent<usize>;
 impl NetToken {
     pub fn token(&self) -> Token {
         Token(self.data)
+    }
+
+    pub fn tokens<'a>(storage: &'a ReadStorage<'a, NetToken>, set: &BitSet) -> Vec<Token> {
+        (storage, set)
+            .join()
+            .map(|(token, _)| token.token())
+            .collect()
     }
 }
 

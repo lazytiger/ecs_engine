@@ -352,6 +352,7 @@ impl Generator {
         let mut indexes = Vec::new();
         let mut ns = Vec::new();
         let mut cmds = Vec::new();
+        let mut vnames = Vec::new();
         let all_dirs = vec![
             SyncDirection::Team,
             SyncDirection::Database,
@@ -363,6 +364,7 @@ impl Generator {
             mods.push(mod_name.clone());
             for c in &cf.configs {
                 let vname = c.name.clone();
+                vnames.push(vname.clone());
                 let name = format_ident!("{}", c.name);
                 if let Some(component) = &c.component {
                     files.push(mod_name.clone());
@@ -450,14 +452,14 @@ impl Generator {
 
             use specs::{
                 Component, DefaultVecStorage, FlaggedStorage, HashMapStorage, NullStorage,
-                VecStorage
+                VecStorage, DispatcherBuilder,
             };
             use std::{
                 any::Any,
                 ops::{Deref, DerefMut},
             };
             use protobuf::{Message, MaskSet, Mask};
-            use ecs_engine::{ChangeSet, SyncDirection, DataSet};
+            use ecs_engine::{ChangeSet, SyncDirection, DataSet, CommitChangeSystem};
             use byteorder::{BigEndian, ByteOrder};
             #(pub use #inners;)*
 
@@ -525,14 +527,14 @@ impl Generator {
                     self.data.clear_mask();
                 }
 
-                fn encode(&mut self, dir:SyncDirection) ->Vec<u8> {
+                fn encode(&mut self, dir:SyncDirection) ->Option<Vec<u8>> {
                     let mask = match dir {
                         SyncDirection::Client => {
                             if let Some(mask) = &mut self.client_mask {
                                 self.data.mask_by_direction(dir, mask);
                                 mask
                             } else {
-                                 unimplemented!();
+                                return None;
                             }
                         }
                         SyncDirection::Database =>  {
@@ -540,7 +542,7 @@ impl Generator {
                                 self.data.mask_by_direction(dir, mask);
                                 mask
                             } else {
-                                 unimplemented!();
+                                return None;
                             }
                         }
                         SyncDirection::Team =>  {
@@ -548,7 +550,7 @@ impl Generator {
                                 self.data.mask_by_direction(dir, mask);
                                 mask
                             } else {
-                                 unimplemented!();
+                                return None;
                             }
                         }
                         SyncDirection::Around => {
@@ -556,7 +558,7 @@ impl Generator {
                                 self.data.mask_by_direction(dir, mask);
                                 mask
                             } else {
-                                 unimplemented!();
+                                return None;
                             }
                         }
                     };
@@ -564,7 +566,7 @@ impl Generator {
                     self.data.set_mask(mask);
                     if let Err(err) = self.data.write_to_vec(&mut data) {
                         log::error!("encode data failed:{}", err);
-                        data.clear();
+                        return None;
                     } else {
                         let length = (data.len() - 4) as u32;
                         let header = data.as_mut_slice();
@@ -573,7 +575,7 @@ impl Generator {
                     }
                     self.data.clear_mask();
                     mask.clear();
-                    data
+                    Some(data)
                 }
 
                 fn is_dirty(&self) -> bool {
@@ -613,6 +615,12 @@ impl Generator {
             }
 
             #(#cs_codes)*
+
+            pub fn setup(builder:&mut DispatcherBuilder) {
+                #(
+                    builder.add(CommitChangeSystem::<#names>::default(), #vnames, &[]);
+                )*
+            }
         )
         .to_string();
         let mut name = self.component_dir.clone();
