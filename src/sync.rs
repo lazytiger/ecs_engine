@@ -1,6 +1,4 @@
 use crate::SyncDirection;
-use specs::{Component, Entity, VecStorage};
-use specs_hierarchy::Parent;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_COMPONENTS: usize = 1024;
