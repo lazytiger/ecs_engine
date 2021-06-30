@@ -8,6 +8,7 @@ use specs::{
 use specs_hierarchy::Parent;
 use std::{
     any::Any,
+    marker::PhantomData,
     ops::{Deref, DerefMut},
 };
 
@@ -102,29 +103,15 @@ where
     }
 }
 
-pub struct Team {
+pub struct Member<const T: usize> {
     entity: Entity,
 }
 
-impl Component for Team {
+impl<const T: usize> Component for Member<T> {
     type Storage = FlaggedStorage<Self, VecStorage<Self>>;
 }
 
-impl Parent for Team {
-    fn parent_entity(&self) -> Entity {
-        self.entity
-    }
-}
-
-pub struct Scene {
-    entity: Entity,
-}
-
-impl Component for Scene {
-    type Storage = FlaggedStorage<Self, VecStorage<Self>>;
-}
-
-impl Parent for Scene {
+impl<const T: usize> Parent for Member<T> {
     fn parent_entity(&self) -> Entity {
         self.entity
     }

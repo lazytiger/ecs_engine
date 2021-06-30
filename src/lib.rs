@@ -23,10 +23,7 @@ pub use network::{RequestIdent, ResponseSender};
 pub use sync::{ChangeSet, DataSet};
 pub use system::CommitChangeSystem;
 
-use crate::{
-    component::Team,
-    system::{CloseSystem, SceneSystem, TeamSystem},
-};
+use crate::system::{CloseSystem, SceneSystem, TeamSystem};
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]

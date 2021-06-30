@@ -1,5 +1,5 @@
 use crate::{
-    component::{Closing, Scene, Team},
+    component::{Closing, Member},
     dynamic::Library,
     network::{BytesSender, RequestData, ResponseSender},
     sync::ChangeSet,
@@ -8,12 +8,21 @@ use crate::{
 use crossbeam::channel::Receiver;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use protobuf::Mask;
+use slab::Slab;
 use specs::{
-    BitSet, Component, Entities, Join, LazyUpdate, Read, ReadExpect, ReadStorage, RunNow, System,
-    World, WorldExt, WriteStorage,
+    shred::DynamicSystemData, shrev::EventChannel, storage::ComponentEvent, world::Index, BitSet,
+    Component, Entities, Entity, Join, LazyUpdate, Read, ReadExpect, ReadStorage, ReaderId, RunNow,
+    System, Tracked, World, WorldExt, WriteExpect, WriteStorage,
 };
-use specs_hierarchy::{Hierarchy, HierarchySystem, Parent};
-use std::{marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
+use specs_hierarchy::{Hierarchy, HierarchyEvent, HierarchySystem, Parent};
+use std::{
+    collections::HashMap,
+    marker::PhantomData,
+    ops::{Add, Sub},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 pub struct InputSystem<I, O> {
     receiver: Receiver<RequestData<I>>,
@@ -175,13 +184,13 @@ fn get_library_name(path: PathBuf) -> Option<String> {
     None
 }
 
-pub struct CommitChangeSystem<T> {
+pub struct CommitChangeSystem<T, P, S> {
     tick_step: usize,
     counter: usize,
-    _phantom: PhantomData<T>,
+    _phantom: PhantomData<(T, P, S)>,
 }
 
-impl<T> CommitChangeSystem<T> {
+impl<T, P, S> CommitChangeSystem<T, P, S> {
     fn new(tick_step: usize) -> Self {
         Self {
             tick_step,
@@ -191,28 +200,34 @@ impl<T> CommitChangeSystem<T> {
     }
 }
 
-impl<T> Default for CommitChangeSystem<T> {
+impl<T, P, S> Default for CommitChangeSystem<T, P, S> {
     fn default() -> Self {
         Self::new(1)
     }
 }
 
-impl<'a, T> System<'a> for CommitChangeSystem<T>
+impl<'a, T, P, S> System<'a> for CommitChangeSystem<T, P, S>
 where
     T: Component,
     T: ChangeSet,
     T: DataSet,
+    P: Send + Sync + 'static,
+    S: Send + Sync + 'static,
+    P: Component + Position,
+    P::Storage: Tracked,
+    S: Component + SceneData,
 {
     type SystemData = (
         WriteStorage<'a, T>,
         ReadStorage<'a, NetToken>,
         ReadStorage<'a, Team>,
-        ReadExpect<'a, Hierarchy<Team>>,
+        ReadExpect<'a, TeamHierarchy>,
         Read<'a, BytesSender>,
         Entities<'a>,
+        ReadExpect<'a, GridManager<P, S>>,
     );
 
-    fn run(&mut self, (mut data, token, teams, hteams, sender, entities): Self::SystemData) {
+    fn run(&mut self, (mut data, token, teams, hteams, sender, entities, gm): Self::SystemData) {
         self.counter += 1;
         if self.counter != self.tick_step {
             return;
@@ -235,18 +250,273 @@ where
             }
         }
 
-        for (data, _, _, team) in (&mut data, &modified, &entities, &teams).join() {
+        for (data, _, team) in (&mut data, &modified, &teams).join() {
             if let Some(bytes) = data.encode(SyncDirection::Team) {
                 let members = hteams.all_children(team.parent_entity());
                 let tokens = NetToken::tokens(&token, &members);
                 sender.broadcast_bytes(tokens, bytes);
             }
         }
+
+        for (data, _, entity) in (&mut data, &modified, &entities).join() {
+            if let Some(bytes) = data.encode(SyncDirection::Around) {
+                let around = gm.get_around(entity);
+                let tokens = NetToken::tokens(&token, &around);
+                sender.broadcast_bytes(tokens, bytes)
+            }
+        }
+
         T::clear_storage_dirty();
     }
 }
 
+pub type Team = Member<0>;
+pub type Scene = Member<1>;
 pub type TeamSystem = HierarchySystem<Team>;
 pub type TeamHierarchy = Hierarchy<Team>;
 pub type SceneSystem = HierarchySystem<Scene>;
 pub type SceneHierarchy = Hierarchy<Scene>;
+
+pub trait Position {
+    fn x(&self) -> f32;
+    fn y(&self) -> f32;
+}
+
+pub trait SceneData: Clone {
+    fn bounding_box(&self) -> (f32, f32, f32, f32);
+
+    fn grid_size(&self) -> f32;
+
+    fn grid_index(&self, p: &impl Position) -> usize {
+        let x = p.x();
+        let y = p.y();
+        let (min_x, min_y, width, _) = self.bounding_box();
+        let x = ((x - min_x) * 100.0) as i32;
+        let y = ((y - min_y) * 100.0) as i32;
+        let width = (width * 100.0) as i32;
+        let grid_size = (self.grid_size() * 100.0) as i32;
+        let x = x / grid_size;
+        let y = y / grid_size;
+        let column = if width % grid_size == 0 {
+            width / grid_size
+        } else {
+            width / grid_size + 1
+        };
+        (y * column + x) as usize
+    }
+
+    fn around(&self, index: usize) -> Vec<usize> {
+        let mut data = Vec::new();
+        data
+    }
+}
+
+pub struct GridSystem<P, S> {
+    _phantom: PhantomData<(P, S)>,
+}
+
+pub struct GridManager<P, S> {
+    position_reader: ReaderId<ComponentEvent>,
+    hierarchy_reader: ReaderId<HierarchyEvent>,
+    _phantom: PhantomData<P>,
+    /// mapping from entity to grid index
+    user_grids: HashMap<Entity, (Entity, usize, usize)>,
+    /// mapping from scene to grids
+    scene_grids: HashMap<Entity, HashMap<usize, Slab<Entity>>>,
+    scene_data: HashMap<Entity, S>,
+}
+
+impl<P, S> GridManager<P, S>
+where
+    P: Component + Position,
+    P::Storage: Tracked,
+    S: Component + SceneData,
+{
+    pub fn new(
+        position_reader: ReaderId<ComponentEvent>,
+        hierarchy_reader: ReaderId<HierarchyEvent>,
+    ) -> Self {
+        Self {
+            position_reader,
+            hierarchy_reader,
+            _phantom: Default::default(),
+            user_grids: Default::default(),
+            scene_grids: Default::default(),
+            scene_data: Default::default(),
+        }
+    }
+
+    fn maintain<'a>(
+        &mut self,
+        entities: Entities<'a>,
+        positions: ReadStorage<'a, P>,
+        scene: ReadStorage<'a, Scene>,
+        scene_data: ReadStorage<'a, S>,
+        scene_hierarchy: ReadExpect<'a, SceneHierarchy>,
+    ) {
+        let mut modified = BitSet::default();
+        let mut inserted = BitSet::default();
+        let events = scene_hierarchy.changed().read(&mut self.hierarchy_reader);
+        for event in events {
+            match event {
+                HierarchyEvent::Modified(entity) | HierarchyEvent::Removed(entity) => {
+                    modified.add(entity.id());
+                }
+            }
+        }
+        for (_, entity) in (&modified, &entities).join() {
+            self.remove_grid_entity(entity);
+        }
+
+        modified.clear();
+        let events = positions.channel().read(&mut self.position_reader);
+        for event in events {
+            match event {
+                ComponentEvent::Modified(id) => {
+                    modified.add(*id);
+                }
+                ComponentEvent::Inserted(id) => {
+                    inserted.add(*id);
+                }
+                ComponentEvent::Removed(id) => {}
+            }
+        }
+
+        for (entity, pos, scene, _) in (&entities, &positions, &scene, &inserted).join() {
+            let parent = scene.parent_entity();
+            if let Some(sd) = scene_data.get(parent) {
+                let index = sd.grid_index(pos);
+                self.insert_grid_entity(parent, entity, index, sd.clone());
+            } else {
+                log::error!("scene not found");
+            }
+        }
+
+        for (entity, pos, _) in (&entities, &positions, &modified).join() {
+            if let Some((parent, index, key)) = self.user_grids.get(&entity) {
+                if let Some(sd) = self.scene_data.get(parent) {
+                    let new_index = sd.grid_index(pos);
+                    if *index == new_index {
+                        continue;
+                    }
+                    if let Some(grids) = self.scene_grids.get_mut(&parent) {
+                        if let Some(grid) = grids.get_mut(index) {
+                            grid.remove(*key);
+                        }
+                    } else {
+                        log::error!("position modified, but grids not found in manager");
+                    }
+                    self.insert_grid_entity(*parent, entity, new_index, sd.clone());
+                } else {
+                    log::error!("position modified, but scene data not found in manager");
+                }
+            } else {
+                log::error!("position modified, but grid index not found in manager");
+                continue;
+            }
+        }
+
+        let empty_scene: Vec<_> = self
+            .scene_grids
+            .iter()
+            .filter_map(|(entity, grids)| {
+                if 0 == grids.iter().fold(0, |count, (_, slab)| count + slab.len()) {
+                    Some(*entity)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        empty_scene.iter().for_each(|entity| {
+            self.scene_grids.remove(entity);
+        });
+    }
+
+    fn insert_grid_entity(&mut self, parent: Entity, entity: Entity, index: usize, sd: S) {
+        if !self.scene_grids.contains_key(&parent) {
+            self.scene_grids.insert(parent, Default::default());
+        }
+        let grids = self.scene_grids.get_mut(&parent).unwrap();
+        if !grids.contains_key(&index) {
+            grids.insert(index, Default::default());
+        }
+        let grid = grids.get_mut(&index).unwrap();
+        let key = grid.insert(entity);
+        self.user_grids.insert(entity, (parent, index, key));
+        if !self.scene_data.contains_key(&parent) {
+            self.scene_data.insert(parent, sd);
+        }
+    }
+
+    fn remove_grid_entity(&mut self, entity: Entity) {
+        if let Some((parent, index, key)) = self.user_grids.remove(&entity) {
+            if let Some(scene_grid) = self.scene_grids.get_mut(&parent) {
+                if let Some(grid) = scene_grid.get_mut(&index) {
+                    grid.remove(key);
+                }
+            }
+        }
+    }
+
+    pub fn get_around(&self, entity: Entity) -> BitSet {
+        let mut set = BitSet::new();
+        if let Some((parent, index, key)) = self.user_grids.get(&entity) {
+            if let Some(sd) = self.scene_data.get(parent) {
+                if let Some(grids) = self.scene_grids.get(parent) {
+                    for index in sd.around(*index) {
+                        if let Some(grid) = grids.get(&index) {
+                            grid.iter().for_each(|(_, entity)| {
+                                set.add(entity.id());
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        set
+    }
+}
+
+impl<'a, P, S> GridSystem<P, S>
+where
+    P: Component + Position + Send + Sync + 'static,
+    P::Storage: Tracked,
+    S: Component + SceneData + Send + Sync + 'static,
+{
+    pub fn new(world: &mut World) -> Self {
+        if !world.has_value::<GridManager<P, S>>() {
+            let gm = {
+                let mut storage = world.write_storage::<P>();
+                let mut hierarchy = world.write_resource::<SceneHierarchy>();
+                GridManager::<P, S>::new(storage.register_reader(), hierarchy.track())
+            };
+            world.insert(gm);
+        }
+        Self {
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<'a, P, S> System<'a> for GridSystem<P, S>
+where
+    P: Component + Position + Send + Sync + 'static,
+    P::Storage: Tracked,
+    S: Component + SceneData + Send + Sync + 'static,
+{
+    type SystemData = (
+        Entities<'a>,
+        ReadStorage<'a, P>,
+        ReadStorage<'a, Scene>,
+        ReadStorage<'a, S>,
+        WriteExpect<'a, GridManager<P, S>>,
+        ReadExpect<'a, SceneHierarchy>,
+    );
+
+    fn run(
+        &mut self,
+        (entities, positions, scene, scene_data, mut gm, hierarchy): Self::SystemData,
+    ) {
+        gm.maintain(entities, positions, scene, scene_data, hierarchy);
+    }
+}
