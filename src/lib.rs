@@ -237,12 +237,12 @@ impl Engine {
     }
 }
 
-pub fn unix_timestamp() -> u64 {
+pub fn unix_timestamp() -> Duration {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Err(err) => {
             log::error!("get unix timestamp failed:{}", err);
-            0
+            Duration::from_secs(0)
         }
-        Ok(d) => d.as_secs(),
+        Ok(d) => d,
     }
 }

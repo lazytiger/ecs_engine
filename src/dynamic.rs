@@ -60,7 +60,7 @@ impl Library {
         cfg_if::cfg_if! {
             if #[cfg(feature="debug")] {
                 let original_path = path.clone();
-                path.push(format!(".{}", unix_timestamp()));
+                path.push(format!(".{}", unix_timestamp().as_secs()));
                 if let Err(err) = std::fs::copy(original_path.clone(), path.clone()) {
                     log::error!("copy dll file from {:?} to {:?} failed:{}", original_path, path, err);
                     return;

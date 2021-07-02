@@ -330,9 +330,9 @@ pub struct GridManager<P, S> {
     hierarchy_reader: ReaderId<HierarchyEvent>,
     _phantom: PhantomData<P>,
     /// mapping from entity to grid index
-    user_grids: HashMap<Entity, (Entity, usize, usize)>,
+    user_grids: HashMap<Entity, (Entity, usize)>,
     /// mapping from scene to grids
-    scene_grids: HashMap<Entity, HashMap<usize, Slab<Entity>>>,
+    scene_grids: HashMap<Entity, HashMap<usize, BitSet>>,
     scene_data: HashMap<Entity, S>,
 }
 
@@ -428,10 +428,10 @@ where
         }
 
         for (entity, pos, _) in (&entities, &positions, &modified).join() {
-            if let Some((parent, index, key)) = self
+            if let Some((parent, index)) = self
                 .user_grids
                 .get(&entity)
-                .map(|(parent, index, key)| (*parent, *index, *key))
+                .map(|(parent, index)| (*parent, *index))
             {
                 if let Some(sd) = scene_data.get(parent) {
                     let new_index = sd.grid_index(pos);
@@ -440,7 +440,7 @@ where
                     }
                     if let Some(grids) = self.scene_grids.get_mut(&parent) {
                         if let Some(grid) = grids.get_mut(&index) {
-                            grid.remove(key);
+                            grid.remove(entity.id());
                         }
                     } else {
                         log::error!("position modified, but grids not found in manager");
@@ -459,7 +459,10 @@ where
             .scene_grids
             .iter()
             .filter_map(|(entity, grids)| {
-                if 0 == grids.iter().fold(0, |count, (_, slab)| count + slab.len()) {
+                if 0 == grids
+                    .iter()
+                    .fold(0, |count, (_, grid)| count + grid.layer0_as_slice().len())
+                {
                     Some(*entity)
                 } else {
                     None
@@ -480,15 +483,17 @@ where
             grids.insert(index, Default::default());
         }
         let grid = grids.get_mut(&index).unwrap();
-        let key = grid.insert(entity);
-        self.user_grids.insert(entity, (parent, index, key));
+        if grid.add(entity.id()) {
+            log::error!("entity:{} already in grid", entity.id());
+        }
+        self.user_grids.insert(entity, (parent, index));
     }
 
     fn remove_grid_entity(&mut self, entity: Entity) {
-        if let Some((parent, index, key)) = self.user_grids.remove(&entity) {
+        if let Some((parent, index)) = self.user_grids.remove(&entity) {
             if let Some(scene_grid) = self.scene_grids.get_mut(&parent) {
                 if let Some(grid) = scene_grid.get_mut(&index) {
-                    grid.remove(key);
+                    grid.remove(entity.id());
                 }
             }
         }
@@ -496,14 +501,12 @@ where
 
     pub fn get_around(&self, entity: Entity) -> BitSet {
         let mut set = BitSet::new();
-        if let Some((parent, index, _)) = self.user_grids.get(&entity) {
+        if let Some((parent, index)) = self.user_grids.get(&entity) {
             if let Some(sd) = self.scene_data.get(parent) {
                 if let Some(grids) = self.scene_grids.get(parent) {
                     for index in sd.around(*index) {
                         if let Some(grid) = grids.get(&index) {
-                            grid.iter().for_each(|(_, entity)| {
-                                set.add(entity.id());
-                            });
+                            set |= grid;
                         }
                     }
                 }
