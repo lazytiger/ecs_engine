@@ -430,3 +430,7 @@ TBD
 * 离线用户数据如何处理？
 * 数据集，包括标脏以及同步
 * 数据库，包括持久化以及拉取
+* 读取请求数据从RunNow移到System里去，利用SystemData生成
+* 增加统计类System支持
+* 重命名component为dataset
+* input改为使用drain
