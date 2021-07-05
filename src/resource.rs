@@ -17,8 +17,8 @@ impl TimeStatistic {
         }
     }
 
-    pub fn add_time(&self, name: impl Into<String>, begin: Duration, end: Duration) {
-        self.times.lock().unwrap().insert(name.into(), (begin, end));
+    pub fn add_time(&self, name: String, begin: Duration, end: Duration) {
+        self.times.lock().unwrap().insert(name, (begin, end));
     }
 
     pub fn print(&self) {

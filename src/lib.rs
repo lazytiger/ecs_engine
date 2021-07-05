@@ -12,7 +12,7 @@ pub(crate) mod sync;
 pub(crate) mod system;
 
 use crate::{network::async_run, system::InputSystem};
-use specs::{DispatcherBuilder, World, WorldExt};
+use specs::{DispatcherBuilder, System, World, WorldExt};
 use std::{thread::sleep, time::Duration};
 
 pub use codegen::{export, init_log, system};
@@ -24,11 +24,15 @@ pub use network::{RequestIdent, ResponseSender};
 pub use sync::{ChangeSet, DataSet};
 pub use system::{CommitChangeSystem, GridSystem, SceneSystem, TeamSystem};
 
-use crate::system::CloseSystem;
+use crate::{
+    resource::TimeStatistic,
+    system::{CloseSystem, PrintStatisticSystem, StatisticSystem},
+};
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
+use specs::shred::SystemData;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Trait for requests enum type, it's an aggregation of all requests
@@ -79,7 +83,7 @@ pub enum BuildEngineError {
     DecoderNotSet,
 }
 
-pub struct EngineBuilder {
+pub struct EngineBuilder<'a, 'b> {
     address: Option<SocketAddr>,
     fps: u32,
     idle_timeout: Duration,
@@ -90,9 +94,11 @@ pub struct EngineBuilder {
     max_response_size: usize,
     bounded_size: usize,
     library_path: String,
+    profiler: bool,
+    builder: Option<DispatcherBuilder<'a, 'b>>,
 }
 
-impl EngineBuilder {
+impl<'a, 'b> EngineBuilder<'a, 'b> {
     pub fn with_address(mut self, address: SocketAddr) -> Self {
         self.address.replace(address);
         self
@@ -143,7 +149,27 @@ impl EngineBuilder {
         self
     }
 
-    pub fn build(self) -> Result<Engine, BuildEngineError> {
+    pub fn with_profiler(mut self) -> Self {
+        self.profiler = true;
+        self
+    }
+
+    pub fn add<T>(&mut self, name: &str, system: T, dep: &[&str])
+    where
+        T: for<'c> System<'c> + Send + 'a,
+        for<'c> <T as System<'c>>::SystemData: SystemData<'c>,
+    {
+        if self.profiler {
+            self.builder
+                .as_mut()
+                .unwrap()
+                .add(StatisticSystem(name.into(), system), name, dep);
+        } else {
+            self.builder.as_mut().unwrap().add(system, name, dep);
+        }
+    }
+
+    pub fn build(self) -> Result<Engine<'a, 'b>, BuildEngineError> {
         if self.address.is_none() {
             return Err(BuildEngineError::AddressNotSet);
         }
@@ -157,14 +183,14 @@ impl EngineBuilder {
     }
 }
 
-pub struct Engine {
+pub struct Engine<'a, 'b> {
     address: SocketAddr,
     sleep: Duration,
-    builder: EngineBuilder,
+    builder: EngineBuilder<'a, 'b>,
 }
 
-impl Engine {
-    pub fn builder() -> EngineBuilder {
+impl<'a, 'b> Engine<'a, 'b> {
+    pub fn builder() -> EngineBuilder<'a, 'b> {
         EngineBuilder {
             address: None,
             fps: 30,
@@ -176,10 +202,12 @@ impl Engine {
             poll_timeout: None,
             bounded_size: 0,
             library_path: Default::default(),
+            profiler: false,
+            builder: Some(DispatcherBuilder::new()),
         }
     }
 
-    pub fn run<I, O, S>(self, setup: S)
+    pub fn run<I, O, S>(mut self, setup: S)
     where
         I: Input<Output = O> + Send + Sync + 'static,
         O: Clone + Send + Sync + 'static,
@@ -201,8 +229,12 @@ impl Engine {
         world.register::<NetToken>();
 
         let dm = DynamicManager::new(self.builder.library_path.clone());
-        let mut builder = DispatcherBuilder::new();
+        let mut builder = self.builder.builder.take().unwrap();
         builder.add_thread_local(InputSystem::new(receiver, sender.clone()));
+        if self.builder.profiler {
+            world.insert(TimeStatistic::new());
+            builder.add_thread_local(PrintStatisticSystem);
+        }
         cfg_if::cfg_if! {
             if #[cfg(feature="debug")] {
                 builder.add_thread_local(crate::system::FsNotifySystem::new(self.builder.library_path.clone(), false));

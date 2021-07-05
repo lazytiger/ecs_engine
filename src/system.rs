@@ -9,9 +9,8 @@ use crate::{
 use crossbeam::channel::Receiver;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use specs::{
-    shred::{DynamicSystemData, SystemData},
-    BitSet, Component, Entities, Join, LazyUpdate, Read, ReadExpect, ReadStorage, RunNow, System,
-    Tracked, World, WorldExt, WriteExpect, WriteStorage,
+    shred::SystemData, BitSet, Component, Entities, Join, LazyUpdate, Read, ReadExpect,
+    ReadStorage, RunNow, System, Tracked, World, WorldExt, WriteExpect, WriteStorage,
 };
 use specs_hierarchy::{HierarchySystem, Parent};
 use std::{
@@ -308,14 +307,12 @@ where
     }
 }
 
-pub struct StatisticSystem<N: Into<String>, T>(N, T);
+pub struct StatisticSystem<T>(pub String, pub T);
 
-impl<'a, N, T> System<'a> for StatisticSystem<N, T>
+impl<'a, T> System<'a> for StatisticSystem<T>
 where
-    N: Into<String> + Clone,
     T: System<'a>,
-    <T as System<'a>>::SystemData: DynamicSystemData<'a>,
-    <T as System<'a>>::SystemData: SystemData<'a>,
+    T::SystemData: SystemData<'a>,
 {
     type SystemData = (ReadExpect<'a, TimeStatistic>, T::SystemData);
 
@@ -324,5 +321,16 @@ where
         self.1.run(data);
         let end = UNIX_EPOCH.elapsed().unwrap();
         ts.add_time(self.0.clone(), begin, end);
+    }
+}
+
+pub struct PrintStatisticSystem;
+
+impl<'a> System<'a> for PrintStatisticSystem {
+    type SystemData = ReadExpect<'a, TimeStatistic>;
+
+    fn run(&mut self, data: Self::SystemData) {
+        data.print();
+        data.clear();
     }
 }
