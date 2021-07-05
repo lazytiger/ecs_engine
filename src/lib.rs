@@ -2,29 +2,27 @@
 
 use std::{net::SocketAddr, ops::Deref};
 
-mod component;
-mod config;
-mod dlog;
-mod dynamic;
-mod network;
-mod sync;
-mod system;
+pub(crate) mod component;
+pub(crate) mod config;
+pub(crate) mod dlog;
+pub(crate) mod dynamic;
+pub(crate) mod network;
+pub(crate) mod resource;
+pub(crate) mod sync;
+pub(crate) mod system;
 
 use crate::{network::async_run, system::InputSystem};
 use specs::{DispatcherBuilder, World, WorldExt};
 use std::{thread::sleep, time::Duration};
 
 pub use codegen::{export, init_log, system};
-pub use component::{Closing, HashComponent, NetToken, SelfSender};
+pub use component::{Closing, HashComponent, NetToken, Position, SceneData, SelfSender};
 pub use config::{Generator, SyncDirection};
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
 pub use network::{RequestIdent, ResponseSender};
 pub use sync::{ChangeSet, DataSet};
-pub use system::{
-    CommitChangeSystem, GridSystem, Position, SceneData, SceneMember, SceneSystem, TeamMember,
-    TeamSystem,
-};
+pub use system::{CommitChangeSystem, GridSystem, SceneSystem, TeamSystem};
 
 use crate::system::CloseSystem;
 #[cfg(target_os = "windows")]

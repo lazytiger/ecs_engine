@@ -5,6 +5,7 @@ use crate::{
 use std::{
     collections::HashMap,
     ffi::OsString,
+    path::PathBuf,
     sync::{Arc, RwLock},
 };
 
@@ -60,7 +61,7 @@ impl Library {
         cfg_if::cfg_if! {
             if #[cfg(feature="debug")] {
                 let original_path = path.clone();
-                path.push(format!(".{}", unix_timestamp().as_secs()));
+                path.push(format!(".{}", crate::unix_timestamp().as_secs()));
                 if let Err(err) = std::fs::copy(original_path.clone(), path.clone()) {
                     log::error!("copy dll file from {:?} to {:?} failed:{}", original_path, path, err);
                     return;
@@ -178,4 +179,19 @@ impl<T> DynamicSystem<T> {
         self.fname = fname;
         self.get_symbol(dm);
     }
+}
+
+pub fn get_library_name(path: PathBuf) -> Option<String> {
+    if let Some(file_name) = path.file_name() {
+        if let Some(file_name) = file_name.to_str() {
+            if file_name.starts_with(std::env::consts::DLL_PREFIX)
+                && file_name.ends_with(std::env::consts::DLL_SUFFIX)
+            {
+                let begin = std::env::consts::DLL_PREFIX.len();
+                let end = file_name.len() - std::env::consts::DLL_SUFFIX.len();
+                return Some(file_name[begin..end].into());
+            }
+        }
+    }
+    None
 }

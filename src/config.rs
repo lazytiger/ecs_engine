@@ -860,7 +860,8 @@ impl Generator {
                 )?;
             }
             if mask {
-                writeln!(file, "\tuint64 mask = {};", v.max_number() + 1)?;
+                writeln!(file, "\tuint64 _mask = {};", v.max_number() + 1)?;
+                writeln!(file, "\tbool _deleted = {};", v.max_number() + 2)?;
             }
             writeln!(file, "}}")?;
         }
