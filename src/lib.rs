@@ -14,7 +14,7 @@ use crate::{network::async_run, system::InputSystem};
 use specs::{DispatcherBuilder, World, WorldExt};
 use std::{thread::sleep, time::Duration};
 
-pub use codegen::{changeset, export, init_log, system};
+pub use codegen::{export, init_log, system};
 pub use component::{Closing, HashComponent, NetToken, SelfSender};
 pub use config::{Generator, SyncDirection};
 pub use dlog::{init as init_logger, LogParam};

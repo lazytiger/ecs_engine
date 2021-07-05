@@ -2,15 +2,11 @@
 use crate::{Output, ResponseSender};
 use mio::Token;
 use specs::{
-    storage::UnprotectedStorage, BitSet, Component, DenseVecStorage, Entity, FlaggedStorage,
-    HashMapStorage, Join, NullStorage, ReadStorage, VecStorage,
+    BitSet, Component, DenseVecStorage, Entity, FlaggedStorage, HashMapStorage, Join, NullStorage,
+    ReadStorage, VecStorage,
 };
 use specs_hierarchy::Parent;
-use std::{
-    any::Any,
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 macro_rules! component {
     ($storage:ident, $name:ident) => {

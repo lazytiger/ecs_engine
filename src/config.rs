@@ -142,16 +142,16 @@ impl Config {
 
 #[derive(Default)]
 pub struct Generator {
-    /// 用于存储配置信息，其内含有requests, responses, components三个目录
+    /// 用于存储配置信息，其内含有request, response, dataset三个目录
     config_dir: PathBuf,
-    /// 用于存储生成的.proto文件，其内含有requests, responses, components三个目录
+    /// 用于存储生成的.proto文件，其内含有request, response, dataset三个目录
     proto_dir: PathBuf,
     /// 用于存储生成的request pb文件
     request_dir: PathBuf,
     /// 用于存储生成的response pb文件
     response_dir: PathBuf,
-    /// 用于存储生成的component pb文件
-    component_dir: PathBuf,
+    /// 用于存储生成的dataset pb文件
+    dataset_dir: PathBuf,
 }
 
 #[derive(Debug, From)]
@@ -195,8 +195,8 @@ impl Generator {
         self
     }
 
-    pub fn component_dir(&mut self, component_dir: impl AsRef<Path>) -> &mut Self {
-        self.component_dir = component_dir.as_ref().to_owned();
+    pub fn dataset_dir(&mut self, dataset_dir: impl AsRef<Path>) -> &mut Self {
+        self.dataset_dir = dataset_dir.as_ref().to_owned();
         self
     }
 
@@ -233,23 +233,23 @@ impl Generator {
     pub fn run(&mut self) -> Result<(), Error> {
         let empty_path = PathBuf::new();
         if self.request_dir == empty_path {
-            self.request_dir = "src/requests".into();
+            self.request_dir = "src/request".into();
         }
-        if self.component_dir == empty_path {
-            self.component_dir = "src/components".into();
+        if self.dataset_dir == empty_path {
+            self.dataset_dir = "src/dataset".into();
         }
         if self.response_dir == empty_path {
-            self.response_dir = "src/responses".into();
+            self.response_dir = "src/response".into();
         }
         self.gen_request()?;
         self.gen_response()?;
-        self.gen_component()?;
+        self.gen_dataset()?;
         Ok(())
     }
 
     fn gen_response(&self) -> Result<(), Error> {
         self.gen_io_config(
-            "responses",
+            "response",
             self.response_dir.clone(),
             |mods, names, files, inners, cmds| {
                 quote!(
@@ -312,12 +312,12 @@ impl Generator {
         )
     }
 
-    fn gen_component(&self) -> Result<(), Error> {
+    fn gen_dataset(&self) -> Result<(), Error> {
         let mut config_dir = self.config_dir.clone();
-        config_dir.push("components");
+        config_dir.push("dataset");
 
         let mut proto_dir = self.proto_dir.clone();
-        proto_dir.push("components");
+        proto_dir.push("dataset");
 
         let configs = Self::parse_config(config_dir)?;
         for (path, cf) in &configs {
@@ -341,7 +341,7 @@ impl Generator {
         }
 
         Self::gen_messages(&configs, proto_dir.clone(), true)?;
-        Self::gen_protos(proto_dir, self.component_dir.clone())?;
+        Self::gen_protos(proto_dir, self.dataset_dir.clone())?;
 
         let mut mods = Vec::new();
         let mut names = Vec::new();
@@ -411,6 +411,8 @@ impl Generator {
                 }
                 let cs_code = quote! {
                     impl DirectionMask for #mod_name::#name {
+
+                        #[allow(unused_variables)]
                         fn mask_by_direction(&self, dir:SyncDirection, ms: &mut MaskSet) {
                             let mask = match dir {
                                 SyncDirection::Client => #client_mask,
@@ -629,7 +631,7 @@ impl Generator {
             }
         )
         .to_string();
-        let mut name = self.component_dir.clone();
+        let mut name = self.dataset_dir.clone();
         name.push("mod.rs");
         let mut file = File::create(name.clone())?;
         writeln!(
@@ -745,7 +747,7 @@ impl Generator {
     }
 
     fn gen_request(&self) -> Result<(), Error> {
-        self.gen_io_config("requests", self.request_dir.clone(), | mods, names, files,inners, cmds| {
+        self.gen_io_config("request", self.request_dir.clone(), | mods, names, files,inners, cmds| {
             quote!(
             #(mod #mods;)*
 
@@ -754,7 +756,7 @@ impl Generator {
             use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender, SelfSender};
             use protobuf::Message;
             use specs::{error::Error, World, WorldExt};
-            use crate::responses::Response;
+            use crate::response::Response;
 
             #(pub type #names = HashComponent<#files::#names>;)*
             #(pub use #inners;)*

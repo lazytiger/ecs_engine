@@ -4,9 +4,9 @@ use convert_case::{Case, Casing};
 use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{
-    parse_macro_input, parse_quote, spanned::Spanned, token::Pub, Attribute, Field, Fields, FnArg,
-    GenericArgument, ItemFn, ItemStruct, Lit, LitBool, LitStr, Meta, Pat, PathArguments,
-    ReturnType, Signature, Type, TypePath, VisPublic, Visibility,
+    parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, GenericArgument, ItemFn,
+    Lit, LitBool, LitStr, Meta, Pat, PathArguments, ReturnType, Signature, Type, TypePath,
+    Visibility,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -53,10 +53,6 @@ enum Error {
         "invalid return type only Option<Component> or tuple of Option<Component> is accepted"
     )]
     InvalidReturnType(Span),
-    #[error("Changeset only support no more than 126 fields")]
-    MaxFieldNumberExceeds,
-    #[error("component number should not greater than 1024")]
-    MaxComponentNumberExceeds,
 }
 
 impl Error {
@@ -943,6 +939,7 @@ pub fn export(attr: TokenStream, item: TokenStream) -> TokenStream {
     code.into()
 }
 
+#[allow(dead_code)]
 fn is_primitive(ty: &Type) -> bool {
     for sty in [
         "u8", "u16", "u32", "u64", "u128", "usize", "bool", "char", "f32", "f64", "i8", "i16",
@@ -953,75 +950,6 @@ fn is_primitive(ty: &Type) -> bool {
         }
     }
     false
-}
-
-const MAX_COMPONENTS: usize = 1024;
-
-#[proc_macro_attribute]
-pub fn changeset(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    static mut COUNTER: usize = 0;
-
-    let index = unsafe { COUNTER };
-    if index >= MAX_COMPONENTS {
-        return Error::MaxComponentNumberExceeds.emit().into();
-    }
-
-    let mut input = parse_macro_input!(item as ItemStruct);
-    if input.fields.len() > 126 {
-        return Error::MaxFieldNumberExceeds.emit().into();
-    }
-
-    input.vis = Visibility::Public(VisPublic {
-        pub_token: Pub {
-            span: input.vis.span(),
-        },
-    });
-    input
-        .fields
-        .iter_mut()
-        .for_each(|f| f.vis = Visibility::Inherited);
-
-    let idents: Vec<_> = input
-        .fields
-        .iter()
-        .map(|f| f.ident.clone().unwrap())
-        .collect();
-    let indexes = 0..idents.len();
-    let types: Vec<_> = input.fields.iter().map(|f| f.ty.clone()).collect();
-    let types_ref: Vec<_> = types
-        .iter()
-        .map(|t| if is_primitive(t) { quote!() } else { quote!(&) })
-        .collect();
-    let name = input.ident.clone();
-    let field = Field {
-        attrs: Vec::new(),
-        vis: Visibility::Inherited,
-        ident: Some(format_ident!("mask")),
-        colon_token: None,
-        ty: parse_quote!(u128),
-    };
-    match &mut input.fields {
-        Fields::Named(named) => named.named.push(field),
-        _ => unreachable!(),
-    }
-
-    let impl_code = quote! {
-        impl ::ecs_engine::ChangeSet for #name {
-            #[inline]
-            fn index() -> usize {
-                #index
-            }
-        }
-    };
-
-    unsafe {
-        COUNTER += 1;
-    }
-    quote!(
-        #input
-        #impl_code
-    )
-    .into()
 }
 
 #[proc_macro_attribute]

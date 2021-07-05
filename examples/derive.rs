@@ -1,42 +1,50 @@
 #![feature(macro_attributes_in_derive_output)]
 #![deny(unsafe_code)]
-use ecs_engine::{changeset, export, system, ChangeSet, DynamicManager};
+#![allow(dead_code)]
+use ecs_engine::{export, system, ChangeSet, DynamicManager};
 use specs::{
     world::Index, BitSet, Component, DenseVecStorage, DispatcherBuilder, HashMapStorage, Join,
     LazyUpdate, VecStorage, World, WorldExt,
 };
 
-#[changeset]
 #[derive(Clone, Default, Component)]
 pub struct UserInfo {
     pub name: String,
     pub guild_id: Index,
 }
 
-#[changeset]
 #[derive(Clone, Default, Component)]
 pub struct GuildInfo {
     users: BitSet,
     pub name: String,
 }
 
-#[changeset]
 #[derive(Clone, Default, Component)]
 pub struct BagInfo {
     pub items: Vec<String>,
 }
 
-#[changeset]
 #[derive(Clone, Default, Component)]
 pub struct GuildMember {
     pub role: u8,
 }
 
-#[changeset]
 #[derive(Component)]
 #[storage(HashMapStorage)]
 pub struct UserInput {
     name: String,
+}
+
+impl ChangeSet for BagInfo {
+    fn index() -> usize {
+        todo!()
+    }
+}
+
+impl ChangeSet for UserInfo {
+    fn index() -> usize {
+        todo!()
+    }
 }
 
 #[system]
@@ -108,7 +116,6 @@ fn user_derive_test(
     None
 }
 
-#[changeset]
 #[derive(Component)]
 #[storage(VecStorage)]
 pub struct MyTest {
@@ -117,7 +124,6 @@ pub struct MyTest {
     sex: u8,
 }
 
-#[changeset]
 #[derive(Component)]
 #[storage(VecStorage)]
 pub struct MyTest1 {

@@ -1,6 +1,6 @@
 use crate::{
     dlog::{log_param, LogParam},
-    unix_timestamp, Symbol,
+    Symbol,
 };
 use std::{
     collections::HashMap,

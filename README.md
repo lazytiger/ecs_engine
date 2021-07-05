@@ -76,45 +76,6 @@
         * 缺点
             * 接口对新人不友好
             * 模板代码过多
-        * 示例
-        ```rust
-        #[derive(Default)]
-        struct UserTestSystem {
-            lib: DynamicSystem<fn(&UserInfo, &BagInfo)>,
-        }
-
-        impl UserTestSystem {
-            pub fn setup(
-                mut self,
-                world: &mut World,
-                builder: &mut DispatcherBuilder,
-                dm: &DynamicManager,
-            ) {
-                world.register::<UserInfo>();
-                world.register::<BagInfo>();
-                self.lib.init("".into(), "".into(), dm);
-                builder.add(self, "user_test", &[]);
-            }
-        }
-
-        impl<'a> System<'a> for UserTestSystem {
-            type SystemData = (
-                ReadStorage<'a, UserInfo>,
-                ReadStorage<'a, BagInfo>,
-                Read<'a, DynamicManager>,
-            );
-
-            fn run(&mut self, (user, bag, dm): Self::SystemData) {
-                if let Some(symbol) = self.lib.get_symbol(&dm) {
-                    for (user, bag) in (&user, &bag).join() {
-                        (*symbol)(user, bag);
-                    }
-                } else {
-                    todo!()
-                }
-            }
-        }
-        ```
     * legion
         * 优点
             * 接口友好
@@ -417,6 +378,12 @@ TBD
     }
     ```
     * 如果需要完整的全部数据时，应该clone一份数据出来，然后再调用mask_all方法，然后再编码
+    * 客户端在使用时，需要分辨哪些数据是新加的，哪些数据是删除的，以便针对资源层作为相应的逻辑，这一点可以使用mask来进行标记，大致可能需要如下状态,
+      由于protobuf里field number从1开始，所以最低位是无用的，再加上最高位，我们取两位作为标记位，则可以得到如下4种状态
+        * 删除标记(包括先增后删，为什么不需要保留增加标记？），可以用0b01来进行标识
+        * 增加标记，可以用0b10来进行标记
+        * 先删后增(为什么需要两个标记同时保留？），应该同时具有，0b11
+        * 单纯修改，0b00
 
 # 典型应用场景实现
 希望大家可以fork本工程出来，然后实现一些常见功能并补充到下面
@@ -432,5 +399,5 @@ TBD
 * 数据库，包括持久化以及拉取
 * 读取请求数据从RunNow移到System里去，利用SystemData生成
 * 增加统计类System支持
-* 重命名component为dataset
+* ~~重命名component为dataset~~
 * input改为使用drain

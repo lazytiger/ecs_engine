@@ -7,14 +7,13 @@ use crate::{
 };
 use crossbeam::channel::Receiver;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
-use slab::Slab;
 use specs::{
     storage::ComponentEvent, BitSet, Component, Entities, Entity, Join, LazyUpdate, Read,
     ReadExpect, ReadStorage, ReaderId, RunNow, System, Tracked, World, WorldExt, WriteExpect,
     WriteStorage,
 };
 use specs_hierarchy::{Hierarchy, HierarchyEvent, HierarchySystem, Parent};
-use std::{collections::HashMap, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, marker::PhantomData, path::PathBuf, time::Duration};
 
 pub struct InputSystem<I, O> {
     receiver: Receiver<RequestData<I>>,
@@ -112,7 +111,7 @@ where
 }
 
 pub struct FsNotifySystem {
-    watcher: RecommendedWatcher,
+    _watcher: RecommendedWatcher,
     receiver: std::sync::mpsc::Receiver<DebouncedEvent>,
 }
 
@@ -131,7 +130,10 @@ impl FsNotifySystem {
                 },
             )
             .expect("watch FsNotify failed");
-        Self { watcher, receiver }
+        Self {
+            _watcher: watcher,
+            receiver,
+        }
     }
 }
 
@@ -158,7 +160,7 @@ impl<'a> RunNow<'a> for FsNotifySystem {
         })
     }
 
-    fn setup(&mut self, world: &mut World) {}
+    fn setup(&mut self, _world: &mut World) {}
 }
 
 fn get_library_name(path: PathBuf) -> Option<String> {
