@@ -175,7 +175,7 @@ pub struct CommitChangeSystem<T, P, S> {
 }
 
 impl<T, P, S> CommitChangeSystem<T, P, S> {
-    fn new(tick_step: usize) -> Self {
+    pub fn new(tick_step: usize) -> Self {
         Self {
             tick_step,
             counter: 0,

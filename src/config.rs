@@ -375,7 +375,7 @@ impl Generator {
                 } else {
                     inners.push(quote!(#mod_name::#name));
                 }
-                indexes.push(indexes.len());
+                indexes.push(indexes.len() + 2);
                 let mut client_mask = 0u64;
                 let mut around_mask = 0u64;
                 let mut database_mask = 0u64;
@@ -461,9 +461,12 @@ impl Generator {
                 ops::{Deref, DerefMut},
             };
             use protobuf::{Message, MaskSet, Mask};
-            use ecs_engine::{ChangeSet, SyncDirection, DataSet, CommitChangeSystem, SceneData};
+            use ecs_engine::{ChangeSet, SyncDirection, DataSet, CommitChangeSystem};
             use byteorder::{BigEndian, ByteOrder};
             #(pub use #inners;)*
+
+            pub const POSITION_INDEX:usize = 0;
+            pub const SCENE_INDEX:usize = 1;
 
             #[derive(Debug, Default, Clone)]
             pub struct Type<T:Default+Clone, const N: usize, const C: u32> {
@@ -631,7 +634,7 @@ impl Generator {
             where
                 P: Component + ecs_engine::Position + Send + Sync + 'static,
                 P::Storage: Tracked,
-                S: Component + SceneData + Send + Sync + 'static,
+                S: Component + ecs_engine::SceneData + Send + Sync + 'static,
                 S::Storage: Tracked,
             {
                 #(
