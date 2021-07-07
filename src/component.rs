@@ -6,7 +6,10 @@ use specs::{
     ReadStorage, VecStorage,
 };
 use specs_hierarchy::Parent;
-use std::ops::{Deref, DerefMut};
+use std::{
+    cmp::Ordering,
+    ops::{Deref, DerefMut},
+};
 
 macro_rules! component {
     ($storage:ident, $name:ident) => {
@@ -170,6 +173,46 @@ pub trait SceneData: Clone {
         }
         data
     }
+    /// 根据旧的索引以及新索引来得到三个数据，分别代表删除，未变，新增
+    fn diff(&self, old: usize, new: usize) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+        let old = self.around(old);
+        let new = self.around(new);
+        let mut only_old = Vec::new();
+        let mut only_new = Vec::new();
+        let mut share = Vec::new();
+        let (mut i, mut j) = (0, 0);
+        while i < old.len() && j < new.len() {
+            match old[i].cmp(&new[j]) {
+                Ordering::Less => {
+                    only_old.push(old[i]);
+                    i += 1;
+                }
+                Ordering::Equal => {
+                    share.push(old[i]);
+                    i += 1;
+                    j += 1;
+                }
+                Ordering::Greater => {
+                    only_new.push(new[j]);
+                    j += 1;
+                }
+            }
+        }
+        if i < old.len() {
+            only_old.extend_from_slice(&old.as_slice()[i..]);
+        }
+        if j < old.len() {
+            only_new.extend_from_slice(&new.as_slice()[j..]);
+        }
+
+        (only_old, share, only_new)
+    }
 }
 pub type TeamMember = Member<0>;
 pub type SceneMember = Member<1>;
+#[derive(Default)]
+pub struct NewSceneMember(pub Option<BitSet>);
+
+impl Component for NewSceneMember {
+    type Storage = HashMapStorage<Self>;
+}

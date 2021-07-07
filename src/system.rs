@@ -1,5 +1,5 @@
 use crate::{
-    component::{Closing, Position, SceneData, SceneMember, TeamMember},
+    component::{Closing, NewSceneMember, Position, SceneData, SceneMember, TeamMember},
     dynamic::{get_library_name, Library},
     network::{BytesSender, RequestData, ResponseSender},
     resource::{GridManager, SceneHierarchy, TeamHierarchy, TimeStatistic},
@@ -8,6 +8,7 @@ use crate::{
 };
 use crossbeam::channel::Receiver;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
+use protobuf::Mask;
 use specs::{
     shred::SystemData, BitSet, Component, Entities, Join, LazyUpdate, Read, ReadExpect,
     ReadStorage, RunNow, System, Tracked, World, WorldExt, WriteExpect, WriteStorage,
@@ -15,6 +16,7 @@ use specs::{
 use specs_hierarchy::{HierarchySystem, Parent};
 use std::{
     marker::PhantomData,
+    ops::{Deref, DerefMut},
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -191,6 +193,8 @@ impl<T, P, S> Default for CommitChangeSystem<T, P, S> {
 impl<'a, T, P, S> System<'a> for CommitChangeSystem<T, P, S>
 where
     T: Component + ChangeSet + DataSet,
+    <T as Deref>::Target: Mask,
+    T: DerefMut,
     P: Component + Position + Send + Sync + 'static,
     P::Storage: Tracked,
     S: Component + SceneData + Send + Sync + 'static,
@@ -204,22 +208,46 @@ where
         Read<'a, BytesSender>,
         Entities<'a>,
         ReadExpect<'a, GridManager<P, S>>,
+        WriteStorage<'a, NewSceneMember>,
     );
 
-    fn run(&mut self, (mut data, token, teams, hteams, sender, entities, gm): Self::SystemData) {
+    fn run(
+        &mut self,
+        (mut data, token, teams, hteams, sender, entities, gm, mut new_scene_member): Self::SystemData,
+    ) {
         self.counter += 1;
         if self.counter != self.tick_step {
             return;
         } else {
             self.counter = 0;
         }
+
+        // 处理有新玩家进入时需要完整数据集的情况
+        for (data, member, entity) in (&data, new_scene_member.drain(), &entities).join() {
+            if !data.is_direction_enabled(SyncDirection::Around) {
+                continue;
+            }
+            let mut data = data.clone();
+            data.mask_all();
+            if let Some(bytes) = data.encode(SyncDirection::Around) {
+                let around = if let Some(around) = member.0 {
+                    around
+                } else {
+                    gm.get_user_around(entity)
+                };
+                let tokens = NetToken::tokens(&token, &around);
+                sender.broadcast_bytes(tokens, bytes)
+            }
+        }
+
         if !T::is_storage_dirty() {
             return;
         }
 
+        // 处理针对玩家的数据集
         let mut modified = BitSet::new();
         for (data, token, entity) in (&mut data, &token, &entities).join() {
-            if data.is_dirty() {
+            if data.is_data_dirty() {
                 data.commit();
                 let bytes = data.encode(SyncDirection::Client);
                 if let Some(bytes) = bytes {
@@ -229,6 +257,7 @@ where
             }
         }
 
+        // 处理针对组队的数据集
         for (data, _, team) in (&mut data, &modified, &teams).join() {
             if let Some(bytes) = data.encode(SyncDirection::Team) {
                 let members = hteams.all_children(team.parent_entity());
@@ -237,9 +266,10 @@ where
             }
         }
 
+        // 处理针对场景的数据集
         for (data, _, entity) in (&mut data, &modified, &entities).join() {
             if let Some(bytes) = data.encode(SyncDirection::Around) {
-                let around = gm.get_around(entity);
+                let around = gm.get_user_around(entity);
                 let tokens = NetToken::tokens(&token, &around);
                 sender.broadcast_bytes(tokens, bytes)
             }
@@ -297,13 +327,21 @@ where
         ReadStorage<'a, S>,
         WriteExpect<'a, GridManager<P, S>>,
         ReadExpect<'a, SceneHierarchy>,
+        WriteStorage<'a, NewSceneMember>,
     );
 
     fn run(
         &mut self,
-        (entities, positions, scene, scene_data, mut gm, hierarchy): Self::SystemData,
+        (entities, positions, scene, scene_data, mut gm, hierarchy, new_scene_member): Self::SystemData,
     ) {
-        gm.maintain(entities, positions, scene, scene_data, hierarchy);
+        gm.maintain(
+            entities,
+            positions,
+            scene,
+            scene_data,
+            hierarchy,
+            new_scene_member,
+        );
     }
 }
 

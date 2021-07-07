@@ -465,8 +465,8 @@ impl Generator {
             use byteorder::{BigEndian, ByteOrder};
             #(pub use #inners;)*
 
-            #[derive(Debug, Default)]
-            pub struct Type<T:Default, const N: usize, const C: u32> {
+            #[derive(Debug, Default, Clone)]
+            pub struct Type<T:Default+Clone, const N: usize, const C: u32> {
                 data: T,
                 database_mask: Option<MaskSet>,
                 client_mask: Option<MaskSet>,
@@ -474,7 +474,7 @@ impl Generator {
                 team_mask: Option<MaskSet>,
             }
 
-            impl<T:Message + Default, const N:usize, const C: u32> Type<T, N, C> {
+            impl<T:Message + Default + Clone, const N:usize, const C: u32> Type<T, N, C> {
                 pub fn new() ->Self {
                     let client_mask = if N & 0x1 != 0 {
                         Some(MaskSet::default())
@@ -507,7 +507,7 @@ impl Generator {
 
             }
 
-            impl<T:Message + Default + Mask + DirectionMask, const N:usize, const C:u32> DataSet for Type<T, N, C> {
+            impl<T:Message + Default + Mask + DirectionMask + Clone, const N:usize, const C:u32> DataSet for Type<T, N, C> {
                 fn commit(&mut self) {
                     let mut ms = None;
                     if self.client_mask.is_some() {
@@ -580,12 +580,21 @@ impl Generator {
                     Some(data)
                 }
 
-                fn is_dirty(&self) -> bool {
+                fn is_data_dirty(&self) -> bool {
                     self.data.is_dirty()
+                }
+
+                fn is_direction_enabled(&self, dir:SyncDirection) -> bool {
+                    match dir {
+                        SyncDirection::Client => self.client_mask.is_some(),
+                        SyncDirection::Database => self.database_mask.is_some(),
+                        SyncDirection::Team => self.team_mask.is_some(),
+                        SyncDirection::Around => self.around_mask.is_some(),
+                    }
                 }
             }
 
-            impl<T:Default, const N:usize, const C:u32> Deref for Type<T, N, C> {
+            impl<T:Default + Clone, const N:usize, const C:u32> Deref for Type<T, N, C> {
                 type Target = T;
 
                 fn deref(&self) -> &Self::Target {
@@ -593,7 +602,7 @@ impl Generator {
                 }
             }
 
-            impl<T:Default, const N:usize, const C:u32> DerefMut for Type<T, N, C> {
+            impl<T:Default + Clone, const N:usize, const C:u32> DerefMut for Type<T, N, C> {
                 fn deref_mut(&mut self) -> &mut Self::Target {
                     &mut self.data
                 }

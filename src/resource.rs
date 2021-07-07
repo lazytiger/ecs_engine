@@ -1,7 +1,7 @@
-use crate::component::{Position, SceneData, SceneMember, TeamMember};
+use crate::component::{NewSceneMember, Position, SceneData, SceneMember, TeamMember};
 use specs::{
     prelude::ComponentEvent, BitSet, Component, Entities, Entity, Join, ReadExpect, ReadStorage,
-    ReaderId, Tracked,
+    ReaderId, Tracked, WriteStorage,
 };
 use specs_hierarchy::{Hierarchy, HierarchyEvent, Parent};
 use std::{collections::HashMap, marker::PhantomData, sync::Mutex, time::Duration};
@@ -80,6 +80,7 @@ where
         scene: ReadStorage<'a, SceneMember>,
         scene_data: ReadStorage<'a, S>,
         scene_hierarchy: ReadExpect<'a, SceneHierarchy>,
+        mut new_scene_member: WriteStorage<'a, NewSceneMember>,
     ) {
         let mut modified = BitSet::default();
         let mut inserted = BitSet::default();
@@ -136,6 +137,9 @@ where
             if let Some(sd) = scene_data.get(parent) {
                 let index = sd.grid_index(pos);
                 self.insert_grid_entity(parent, entity, index);
+                if let Err(err) = new_scene_member.insert(entity, NewSceneMember(None)) {
+                    log::error!("insert new scene member failed:{}", err);
+                }
             } else {
                 log::error!("scene not found");
             }
@@ -152,7 +156,19 @@ where
                     if index == new_index {
                         continue;
                     }
+                    let (_, _, inserted) = sd.diff(index, new_index);
                     if let Some(grids) = self.scene_grids.get_mut(&parent) {
+                        let mut set = BitSet::new();
+                        for insert in inserted {
+                            if let Some(grid) = grids.get(&insert) {
+                                set |= grid;
+                            }
+                        }
+                        if let Err(err) = new_scene_member.insert(entity, NewSceneMember(Some(set)))
+                        {
+                            log::error!("new scene member failed:{}", err);
+                        }
+
                         if let Some(grid) = grids.get_mut(&index) {
                             grid.remove(entity.id());
                         }
@@ -213,20 +229,26 @@ where
         }
     }
 
-    pub fn get_around(&self, entity: Entity) -> BitSet {
+    fn get_scene_around(&self, parent: &Entity, index: usize) -> BitSet {
         let mut set = BitSet::new();
-        if let Some((parent, index)) = self.user_grids.get(&entity) {
-            if let Some(sd) = self.scene_data.get(parent) {
-                if let Some(grids) = self.scene_grids.get(parent) {
-                    for index in sd.around(*index) {
-                        if let Some(grid) = grids.get(&index) {
-                            set |= grid;
-                        }
+        if let Some(sd) = self.scene_data.get(parent) {
+            if let Some(grids) = self.scene_grids.get(parent) {
+                for index in sd.around(index) {
+                    if let Some(grid) = grids.get(&index) {
+                        set |= grid;
                     }
                 }
             }
         }
         set
+    }
+
+    pub fn get_user_around(&self, entity: Entity) -> BitSet {
+        if let Some((parent, index)) = self.user_grids.get(&entity) {
+            self.get_scene_around(parent, *index)
+        } else {
+            BitSet::new()
+        }
     }
 }
 pub type TeamHierarchy = Hierarchy<TeamMember>;

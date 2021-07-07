@@ -29,10 +29,12 @@ pub trait ChangeSet {
     }
 }
 
-pub trait DataSet {
+pub trait DataSet: Clone {
     fn commit(&mut self);
 
     fn encode(&mut self, dir: SyncDirection) -> Option<Vec<u8>>;
 
-    fn is_dirty(&self) -> bool;
+    fn is_data_dirty(&self) -> bool;
+
+    fn is_direction_enabled(&self, dir: SyncDirection) -> bool;
 }
