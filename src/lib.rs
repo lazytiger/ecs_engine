@@ -16,11 +16,14 @@ use specs::{DispatcherBuilder, System, World, WorldExt};
 use std::{thread::sleep, time::Duration};
 
 pub use codegen::{export, init_log, system};
-pub use component::{Closing, HashComponent, NetToken, Position, SceneData, SelfSender};
+pub use component::{
+    Closing, HashComponent, NetToken, Position, SceneData, SceneMember, SelfSender, TeamMember,
+};
 pub use config::{Generator, SyncDirection};
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
 pub use network::{RequestIdent, ResponseSender};
+pub use resource::SceneManager;
 pub use sync::{ChangeSet, DataSet};
 pub use system::{CommitChangeSystem, GridSystem, SceneSystem, TeamSystem};
 

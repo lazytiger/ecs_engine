@@ -38,7 +38,7 @@ impl TimeStatistic {
     }
 }
 
-pub struct GridManager<P, S> {
+pub struct SceneManager<P, S> {
     position_reader: ReaderId<ComponentEvent>,
     scene_reader: ReaderId<ComponentEvent>,
     hierarchy_reader: ReaderId<HierarchyEvent>,
@@ -48,9 +48,10 @@ pub struct GridManager<P, S> {
     /// mapping from scene to grids
     scene_grids: HashMap<Entity, HashMap<usize, BitSet>>,
     scene_data: HashMap<Entity, S>,
+    scene_mapping: HashMap<u32, Entity>,
 }
 
-impl<P, S> GridManager<P, S>
+impl<P, S> SceneManager<P, S>
 where
     P: Component + Position,
     P::Storage: Tracked,
@@ -70,6 +71,7 @@ where
             user_grids: Default::default(),
             scene_grids: Default::default(),
             scene_data: Default::default(),
+            scene_mapping: Default::default(),
         }
     }
 
@@ -135,10 +137,11 @@ where
         for (entity, pos, scene, _) in (&entities, &positions, &scene, &inserted).join() {
             let parent = scene.parent_entity();
             if let Some(sd) = scene_data.get(parent) {
-                let index = sd.grid_index(pos);
-                self.insert_grid_entity(parent, entity, index);
-                if let Err(err) = new_scene_member.insert(entity, NewSceneMember(None)) {
-                    log::error!("insert new scene member failed:{}", err);
+                if let Some(index) = sd.grid_index(pos) {
+                    self.insert_grid_entity(parent, entity, index);
+                    if let Err(err) = new_scene_member.insert(entity, NewSceneMember(None)) {
+                        log::error!("insert new scene member failed:{}", err);
+                    }
                 }
             } else {
                 log::error!("scene not found");
@@ -152,30 +155,32 @@ where
                 .map(|(parent, index)| (*parent, *index))
             {
                 if let Some(sd) = scene_data.get(parent) {
-                    let new_index = sd.grid_index(pos);
-                    if index == new_index {
-                        continue;
-                    }
-                    let (_, _, inserted) = sd.diff(index, new_index);
-                    if let Some(grids) = self.scene_grids.get_mut(&parent) {
-                        let mut set = BitSet::new();
-                        for insert in inserted {
-                            if let Some(grid) = grids.get(&insert) {
-                                set |= grid;
+                    if let Some(new_index) = sd.grid_index(pos) {
+                        if index == new_index {
+                            continue;
+                        }
+                        let (_, _, inserted) = sd.diff(index, new_index);
+                        if let Some(grids) = self.scene_grids.get_mut(&parent) {
+                            let mut set = BitSet::new();
+                            for insert in inserted {
+                                if let Some(grid) = grids.get(&insert) {
+                                    set |= grid;
+                                }
                             }
-                        }
-                        if let Err(err) = new_scene_member.insert(entity, NewSceneMember(Some(set)))
-                        {
-                            log::error!("new scene member failed:{}", err);
-                        }
+                            if let Err(err) =
+                                new_scene_member.insert(entity, NewSceneMember(Some(set)))
+                            {
+                                log::error!("new scene member failed:{}", err);
+                            }
 
-                        if let Some(grid) = grids.get_mut(&index) {
-                            grid.remove(entity.id());
+                            if let Some(grid) = grids.get_mut(&index) {
+                                grid.remove(entity.id());
+                            }
+                        } else {
+                            log::error!("position modified, but grids not found in manager");
                         }
-                    } else {
-                        log::error!("position modified, but grids not found in manager");
+                        self.insert_grid_entity(parent, entity, new_index);
                     }
-                    self.insert_grid_entity(parent, entity, new_index);
                 } else {
                     log::error!("position modified, but scene data not found in manager");
                 }
@@ -219,6 +224,19 @@ where
         self.user_grids.insert(entity, (parent, index));
     }
 
+    pub fn insert_scene(&mut self, id: u32, entity: Entity) {
+        if self.scene_mapping.insert(id, entity).is_some() {
+            log::error!("scene:{} already inserted", id);
+        }
+    }
+
+    pub fn get_scene_entity(&self, id: u32) -> Option<Entity> {
+        self.scene_mapping.get(&id).map(|entity| *entity)
+    }
+
+    pub fn get_scene_data(&self, entity: Entity) -> Option<&S> {
+        self.scene_data.get(&entity)
+    }
     fn remove_grid_entity(&mut self, entity: Entity) {
         if let Some((parent, index)) = self.user_grids.remove(&entity) {
             if let Some(scene_grid) = self.scene_grids.get_mut(&parent) {

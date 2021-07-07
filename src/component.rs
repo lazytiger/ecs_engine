@@ -131,6 +131,8 @@ pub trait Position {
 
 /// 场景尺寸信息
 pub trait SceneData: Clone {
+    /// 场景id
+    fn id(&self) -> u32;
     /// 场景坐标的最小xy值
     fn get_min_xy(&self) -> (f32, f32);
     /// 获取场景的分块尺寸，即可以分为行列数
@@ -139,17 +141,23 @@ pub trait SceneData: Clone {
     fn grid_size(&self) -> f32;
     /// 根据位置信息计算格子索引
     /// index = y * column + x
-    fn grid_index(&self, p: &impl Position) -> usize {
+    fn grid_index(&self, p: &impl Position) -> Option<usize> {
         let x = p.x();
         let y = p.y();
         let (min_x, min_y) = self.get_min_xy();
+        if x < min_x || y < min_y {
+            return None;
+        }
         let x = ((x - min_x) * 100.0) as i32;
         let y = ((y - min_y) * 100.0) as i32;
         let grid_size = (self.grid_size() * 100.0) as i32;
         let x = x / grid_size;
         let y = y / grid_size;
-        let (_, column) = self.get_size();
-        (y * column + x) as usize
+        let (row, column) = self.get_size();
+        if x >= column || y >= row {
+            return None;
+        }
+        Some((y * column + x) as usize)
     }
     /// 获取周围格子的索引，包括当前格子
     fn around(&self, index: usize) -> Vec<usize> {

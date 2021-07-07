@@ -403,12 +403,20 @@ impl Config {
                         fn_input_types.push(quote!(&#ty));
                     }
                 }
-                Parameter::Resource(vname, index, mutable) => {
+                Parameter::Resource(vname, index, mutable, expect) => {
                     let ty = self.signature.resource_args[*index].clone();
                     let data = if *mutable {
-                        quote!(::specs::Write<'a, #ty>)
+                        if *expect {
+                            quote!(::specs::WriteExpect<'a, #ty>)
+                        } else {
+                            quote!(::specs::Write<'a, #ty>)
+                        }
                     } else {
-                        quote!(::specs::Read<'a, #ty>)
+                        if *expect {
+                            quote!(::specs::ReadExpect<'a, #ty>)
+                        } else {
+                            quote!(::specs::Read<'a, #ty>)
+                        }
                     };
                     system_data_types.push(data);
                     if *mutable {
@@ -604,7 +612,7 @@ impl Config {
 }
 
 enum ArgAttr {
-    Resource,
+    Resource(bool),
     State,
     Input,
     Component,
@@ -612,7 +620,7 @@ enum ArgAttr {
 
 enum Parameter {
     Component(Ident, usize, bool),
-    Resource(Ident, usize, bool),
+    Resource(Ident, usize, bool, bool),
     State(Ident, usize, bool),
     Input(Ident),
     Entity(Ident),
@@ -656,11 +664,12 @@ impl Sig {
                             let elem = ty.elem.as_ref();
                             let attribute = Self::find_remove_arg_attr(&mut arg.attrs)?;
                             match attribute {
-                                Some(ArgAttr::Resource) => {
+                                Some(ArgAttr::Resource(expect)) => {
                                     parameters.push(Parameter::Resource(
                                         name,
                                         resource_args.len(),
                                         mutable,
+                                        expect,
                                     ));
                                     resource_args.push(elem.clone());
                                 }
@@ -781,7 +790,13 @@ impl Sig {
             match attributes[i].path.get_ident() {
                 Some(ident) if ident == "resource" => {
                     attributes.remove(i);
-                    if attr.replace(ArgAttr::Resource).is_some() {
+                    if attr.replace(ArgAttr::Resource(false)).is_some() {
+                        return Err(Error::ConflictParameterAttribute);
+                    }
+                }
+                Some(ident) if ident == "expect" => {
+                    attributes.remove(i);
+                    if attr.replace(ArgAttr::Resource(true)).is_some() {
                         return Err(Error::ConflictParameterAttribute);
                     }
                 }

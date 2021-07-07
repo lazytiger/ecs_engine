@@ -2,7 +2,7 @@ use crate::{
     component::{Closing, NewSceneMember, Position, SceneData, SceneMember, TeamMember},
     dynamic::{get_library_name, Library},
     network::{BytesSender, RequestData, ResponseSender},
-    resource::{GridManager, SceneHierarchy, TeamHierarchy, TimeStatistic},
+    resource::{SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
     sync::ChangeSet,
     DataSet, DynamicManager, Input, NetToken, RequestIdent, SyncDirection,
 };
@@ -207,7 +207,7 @@ where
         ReadExpect<'a, TeamHierarchy>,
         Read<'a, BytesSender>,
         Entities<'a>,
-        ReadExpect<'a, GridManager<P, S>>,
+        ReadExpect<'a, SceneManager<P, S>>,
         WriteStorage<'a, NewSceneMember>,
     );
 
@@ -294,12 +294,12 @@ where
     S::Storage: Tracked,
 {
     pub fn new(world: &mut World) -> Self {
-        if !world.has_value::<GridManager<P, S>>() {
+        if !world.has_value::<SceneManager<P, S>>() {
             let gm = {
                 let mut p_storage = world.write_storage::<P>();
                 let mut s_storage = world.write_storage::<S>();
                 let mut hierarchy = world.write_resource::<SceneHierarchy>();
-                GridManager::<P, S>::new(
+                SceneManager::<P, S>::new(
                     p_storage.register_reader(),
                     s_storage.register_reader(),
                     hierarchy.track(),
@@ -325,7 +325,7 @@ where
         ReadStorage<'a, P>,
         ReadStorage<'a, SceneMember>,
         ReadStorage<'a, S>,
-        WriteExpect<'a, GridManager<P, S>>,
+        WriteExpect<'a, SceneManager<P, S>>,
         ReadExpect<'a, SceneHierarchy>,
         WriteStorage<'a, NewSceneMember>,
     );
