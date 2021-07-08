@@ -213,7 +213,7 @@ where
 
     fn run(
         &mut self,
-        (mut data, token, teams, hteams, sender, entities, gm, mut new_scene_member): Self::SystemData,
+        (mut data, token, teams, hteams, sender, entities, gm, new_scene_member): Self::SystemData,
     ) {
         self.counter += 1;
         if self.counter != self.tick_step {
@@ -229,7 +229,7 @@ where
             }
             let mut data = data.clone();
             data.mask_all();
-            if let Some(bytes) = data.encode(SyncDirection::Around) {
+            if let Some(bytes) = data.encode(entity.id(), SyncDirection::Around) {
                 let around = if let Some(around) = &member.0 {
                     around.clone()
                 } else {
@@ -249,7 +249,7 @@ where
         for (data, token, entity) in (&mut data, &token, &entities).join() {
             if data.is_data_dirty() {
                 data.commit();
-                let bytes = data.encode(SyncDirection::Client);
+                let bytes = data.encode(entity.id(), SyncDirection::Client);
                 if let Some(bytes) = bytes {
                     sender.send_bytes(token.token(), bytes);
                 }
@@ -258,8 +258,8 @@ where
         }
 
         // 处理针对组队的数据集
-        for (data, _, team) in (&mut data, &modified, &teams).join() {
-            if let Some(bytes) = data.encode(SyncDirection::Team) {
+        for (data, id, team) in (&mut data, &modified, &teams).join() {
+            if let Some(bytes) = data.encode(id, SyncDirection::Team) {
                 let members = hteams.all_children(team.parent_entity());
                 let tokens = NetToken::tokens(&token, &members);
                 sender.broadcast_bytes(tokens, bytes);
@@ -267,8 +267,8 @@ where
         }
 
         // 处理针对场景的数据集
-        for (data, _, entity) in (&mut data, &modified, &entities).join() {
-            if let Some(bytes) = data.encode(SyncDirection::Around) {
+        for (data, id, entity) in (&mut data, &modified, &entities).join() {
+            if let Some(bytes) = data.encode(id, SyncDirection::Around) {
                 let around = gm.get_user_around(entity);
                 let tokens = NetToken::tokens(&token, &around);
                 sender.broadcast_bytes(tokens, bytes)

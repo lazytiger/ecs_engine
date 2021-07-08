@@ -66,9 +66,9 @@ pub trait Input: Sized {
 
 pub trait Output: Sized {
     #[cfg(feature = "debug")]
-    fn decode(data: &[u8]) -> Option<Self>;
+    fn decode(data: &[u8]) -> Option<(u32, Self)>;
 
-    fn encode(&self) -> Vec<u8>;
+    fn encode(&self, id: u32) -> Vec<u8>;
 }
 
 /// 只读封装，如果某个变量从根本上不希望进行修改，则可以使用此模板类型
@@ -271,6 +271,7 @@ impl<'a, 'b> Engine<'a, 'b> {
             dispatcher.dispatch_par(&world);
             world.maintain();
             // notify network
+            sender.flush();
             let elapsed = start_time.elapsed();
             if elapsed < self.sleep {
                 sleep(self.sleep - elapsed);

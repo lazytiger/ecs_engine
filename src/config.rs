@@ -271,7 +271,9 @@ impl Generator {
 
                     impl Output for Response {
                         #[cfg(feature="debug")]
-                        fn decode(mut buffer:&[u8]) ->Option<Self> {
+                        fn decode(mut buffer:&[u8]) ->Option<(u32, Self)> {
+                            let id = BigEndian::read_u32(buffer);
+                            buffer = &buffer[4..];
                             let cmd = BigEndian::read_u32(buffer);
                             buffer = &buffer[4..];
                             match cmd {
@@ -279,7 +281,7 @@ impl Generator {
                                     #cmds => {
                                         let mut data = #names::new();
                                         data.merge_from_bytes(buffer).unwrap();
-                                        Some(Response::#names(data))
+                                        Some((id, Response::#names(data)))
                                     },
                             )*
                                 _ => {
@@ -289,8 +291,8 @@ impl Generator {
                             }
                         }
 
-                        fn encode(&self) -> Vec<u8> {
-                            let mut data = vec![0u8;8];
+                        fn encode(&self, id:u32) -> Vec<u8> {
+                            let mut data = vec![0u8;12];
                             let cmd = match self {
                                 #(
                                     Response::#names(r) => {
@@ -302,7 +304,8 @@ impl Generator {
                             let length = (data.len() - 4) as u32;
                             let header = data.as_mut_slice();
                             BigEndian::write_u32(header, length);
-                            BigEndian::write_u32(&mut header[4..], cmd);
+                            BigEndian::write_u32(&mut header[4..], id);
+                            BigEndian::write_u32(&mut header[8..], cmd);
                             data
                         }
                     }
@@ -532,7 +535,7 @@ impl Generator {
                     self.data.clear_mask();
                 }
 
-                fn encode(&mut self, dir:SyncDirection) ->Option<Vec<u8>> {
+                fn encode(&mut self, id:u32, dir:SyncDirection) ->Option<Vec<u8>> {
                     let mask = match dir {
                         SyncDirection::Client => {
                             if let Some(mask) = &mut self.client_mask {
@@ -567,7 +570,7 @@ impl Generator {
                             }
                         }
                     };
-                    let mut data = vec![0u8; 8];
+                    let mut data = vec![0u8; 12];
                     self.data.set_mask(mask);
                     if let Err(err) = self.data.write_to_vec(&mut data) {
                         log::error!("encode data failed:{}", err);
@@ -576,7 +579,8 @@ impl Generator {
                         let length = (data.len() - 4) as u32;
                         let header = data.as_mut_slice();
                         BigEndian::write_u32(header, length);
-                        BigEndian::write_u32(&mut header[4..], C);
+                        BigEndian::write_u32(&mut header[4..], id);
+                        BigEndian::write_u32(&mut header[8..], C);
                     }
                     self.data.clear_mask();
                     mask.clear();
@@ -787,7 +791,7 @@ impl Generator {
                             let entity = world.entities().create();
                             sender.send_entity(token, entity);
                             world.write_component::<NetToken>().insert(entity, NetToken::new(token.0)).map(|_|())?;
-                            world.write_component::<SelfSender<Self::Output>>().insert(entity, SelfSender::new(token, sender)).map(|_|())?;
+                            world.write_component::<SelfSender<Self::Output>>().insert(entity, SelfSender::new(entity.id(), token, sender)).map(|_|())?;
                             entity
                         },
                         RequestIdent::Close(entity) => {

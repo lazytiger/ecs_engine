@@ -74,6 +74,7 @@ impl Component for Closing {
 
 /// 单用于发送数据给自己
 pub struct SelfSender<T> {
+    id: u32,
     token: Token,
     sender: ResponseSender<T>,
 }
@@ -89,12 +90,12 @@ impl<T> SelfSender<T>
 where
     T: Output,
 {
-    pub fn new(token: Token, sender: ResponseSender<T>) -> Self {
-        Self { token, sender }
+    pub fn new(id: u32, token: Token, sender: ResponseSender<T>) -> Self {
+        Self { id, token, sender }
     }
 
     pub fn send_data(&self, data: impl Into<T>) {
-        self.sender.send_data(self.token, data);
+        self.sender.send_data(self.id, self.token, data);
     }
 
     pub fn send_close(&self, confirm: bool) {

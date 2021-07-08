@@ -741,13 +741,13 @@ impl<T> ResponseSender<T> {
 }
 
 impl<T: Output> ResponseSender<T> {
-    pub fn broadcast_data<D: Into<T>>(&self, tokens: Vec<Token>, data: D) {
-        let data = data.into().encode();
+    pub fn broadcast_data<D: Into<T>>(&self, id: u32, tokens: Vec<Token>, data: D) {
+        let data = data.into().encode(id);
         self.sender.broadcast_bytes(tokens, data);
     }
 
-    pub fn send_data<D: Into<T>>(&self, token: Token, data: D) {
-        let data = data.into().encode();
+    pub fn send_data<D: Into<T>>(&self, id: u32, token: Token, data: D) {
+        let data = data.into().encode(id);
         self.sender.broadcast_bytes(vec![token], data);
     }
 }
