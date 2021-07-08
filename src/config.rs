@@ -765,9 +765,9 @@ impl Generator {
 
             use byteorder::{BigEndian, ByteOrder};
             use derive_more::From;
-            use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender, SelfSender};
+            use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender, SelfSender, CleanStorageSystem};
             use protobuf::Message;
-            use specs::{error::Error, World, WorldExt};
+            use specs::{error::Error, World, WorldExt, DispatcherBuilder};
             use crate::response::Response;
 
             #(pub type #names = HashComponent<#files::#names>;)*
@@ -805,6 +805,10 @@ impl Generator {
 
                 fn setup(world:&mut World) {
                     #(world.register::<#names>();)*
+                }
+
+                fn cleanup(builder:&mut DispatcherBuilder)  {
+                    #(builder.add(CleanStorageSystem::<#names>::default(), stringify!(#names), &[]);)*
                 }
 
                 fn decode(mut buffer:&[u8]) ->Option<Self> {

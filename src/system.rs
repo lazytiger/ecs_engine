@@ -373,10 +373,16 @@ impl<'a> System<'a> for PrintStatisticSystem {
     }
 }
 
-pub struct CleanNewMemberSystem;
+#[derive(Default)]
+pub struct CleanStorageSystem<T> {
+    _phantom: PhantomData<T>,
+}
 
-impl<'a> System<'a> for CleanNewMemberSystem {
-    type SystemData = WriteStorage<'a, NewSceneMember>;
+impl<'a, T> System<'a> for CleanStorageSystem<T>
+where
+    T: Component,
+{
+    type SystemData = WriteStorage<'a, T>;
 
     fn run(&mut self, mut data: Self::SystemData) {
         data.drain().join().for_each(|_| {});

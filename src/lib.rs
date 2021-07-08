@@ -25,11 +25,12 @@ pub use dynamic::{DynamicManager, DynamicSystem};
 pub use network::{RequestIdent, ResponseSender};
 pub use resource::SceneManager;
 pub use sync::{ChangeSet, DataSet};
-pub use system::{CommitChangeSystem, GridSystem, SceneSystem, TeamSystem};
+pub use system::{CleanStorageSystem, CommitChangeSystem, GridSystem, SceneSystem, TeamSystem};
 
 use crate::{
+    component::NewSceneMember,
     resource::TimeStatistic,
-    system::{CleanNewMemberSystem, CloseSystem, PrintStatisticSystem, StatisticSystem},
+    system::{CloseSystem, PrintStatisticSystem, StatisticSystem},
 };
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
@@ -52,6 +53,9 @@ pub trait Input: Sized {
 
     /// Register all the actual types as components
     fn setup(world: &mut World);
+
+    /// clean all the input storage
+    fn cleanup(builder: &mut DispatcherBuilder);
 
     /// Decode actual type as header specified.
     fn decode(data: &[u8]) -> Option<Self>;
@@ -234,7 +238,6 @@ impl<'a, 'b> Engine<'a, 'b> {
         let dm = DynamicManager::new(self.builder.library_path.clone());
         let mut builder = self.builder.builder.take().unwrap();
         builder.add_thread_local(InputSystem::new(receiver, sender.clone()));
-        builder.add_thread_local(CleanNewMemberSystem);
         if self.builder.profiler {
             world.insert(TimeStatistic::new());
             builder.add_thread_local(PrintStatisticSystem);
@@ -247,6 +250,11 @@ impl<'a, 'b> Engine<'a, 'b> {
         builder.add(CloseSystem::<O>::new(), "close", &[]);
 
         setup(&mut world, &mut builder, &dm);
+        builder.add(
+            CleanStorageSystem::<NewSceneMember>::default(),
+            "new_scene_member",
+            &[],
+        );
 
         world.insert(dm);
 
