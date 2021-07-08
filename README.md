@@ -277,12 +277,12 @@ mio的Poll就可以了。
   
     | 包体长度 | 命令id | 包体 |
     | --- | --- | --- |
-    | 4 bytes(n)| 4 bytes | n bytes |
+    | 4 bytes(n)| 4 bytes | (n-4) bytes |
 * 响应协议
   
     | 包体长度 | 实体id | 命令id | 包体 | 
     | --- | --- | --- | --- |
-    | 4 bytes(n) | 4 bytes| 4 bytes | n bytes |
+    | 4 bytes(n) | 4 bytes| 4 bytes | (n-8) bytes |
 
   
         
