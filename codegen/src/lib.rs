@@ -509,21 +509,6 @@ impl Config {
             (quote!(), quote!(), static_call)
         };
 
-        let purge_code = if self.signature.input.is_some() {
-            quote! {
-                es.iter().for_each(|e| {
-                    #input_storage.remove(*e);
-                });
-                let es: Vec<_> = (&jentity, &#input_storage).join().map(|(e, _)|e).collect();
-                es.iter().for_each(|e|{
-                    log::error!("entity {:?} has unmatched input in system {}", e, #system_name_str);
-                    #input_storage.remove(*e);
-                });
-            }
-        } else {
-            quote!()
-        };
-
         let system_setup = quote! {
             #dynamic_fn
 
@@ -551,7 +536,6 @@ impl Config {
             SystemType::Single => {
                 let run_code = quote! {
                     (#(#join_names,)*).join().for_each(|(#(#foreach_names,)*)| {
-                        #(#input_enames.push(entity);)*
                         looped = true;
                         #func_call
                     });
@@ -560,7 +544,6 @@ impl Config {
                             log::error!("insert component failed:{}", err);
                         }
                     });)*
-                    #purge_code
                 };
                 let run_code = if self.dynamic {
                     quote! {
@@ -582,7 +565,6 @@ impl Config {
                         );
 
                         fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
-                            #(let mut #input_enames = Vec::new();)*
                             #(let mut #output_enames = Vec::new();)*
                             let mut looped = false;
                             #run_code
