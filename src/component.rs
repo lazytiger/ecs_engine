@@ -141,9 +141,7 @@ pub trait SceneData: Clone {
     fn grid_size(&self) -> f32;
     /// 根据位置信息计算格子索引
     /// index = y * column + x
-    fn grid_index(&self, p: &impl Position) -> Option<usize> {
-        let x = p.x();
-        let y = p.y();
+    fn grid_index(&self, x: f32, y: f32) -> Option<usize> {
         let (min_x, min_y) = self.get_min_xy();
         if x < min_x || y < min_y {
             return None;

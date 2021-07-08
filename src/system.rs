@@ -223,15 +223,15 @@ where
         }
 
         // 处理有新玩家进入时需要完整数据集的情况
-        for (data, member, entity) in (&data, new_scene_member.drain(), &entities).join() {
+        for (data, member, entity) in (&data, &new_scene_member, &entities).join() {
             if !data.is_direction_enabled(SyncDirection::Around) {
                 continue;
             }
             let mut data = data.clone();
             data.mask_all();
             if let Some(bytes) = data.encode(SyncDirection::Around) {
-                let around = if let Some(around) = member.0 {
-                    around
+                let around = if let Some(around) = &member.0 {
+                    around.clone()
                 } else {
                     gm.get_user_around(entity)
                 };
@@ -370,5 +370,15 @@ impl<'a> System<'a> for PrintStatisticSystem {
     fn run(&mut self, data: Self::SystemData) {
         data.print();
         data.clear();
+    }
+}
+
+pub struct CleanNewMemberSystem;
+
+impl<'a> System<'a> for CleanNewMemberSystem {
+    type SystemData = WriteStorage<'a, NewSceneMember>;
+
+    fn run(&mut self, mut data: Self::SystemData) {
+        data.drain().join().for_each(|_| {});
     }
 }

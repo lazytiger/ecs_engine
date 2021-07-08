@@ -29,7 +29,7 @@ pub use system::{CommitChangeSystem, GridSystem, SceneSystem, TeamSystem};
 
 use crate::{
     resource::TimeStatistic,
-    system::{CloseSystem, PrintStatisticSystem, StatisticSystem},
+    system::{CleanNewMemberSystem, CloseSystem, PrintStatisticSystem, StatisticSystem},
 };
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
@@ -234,6 +234,7 @@ impl<'a, 'b> Engine<'a, 'b> {
         let dm = DynamicManager::new(self.builder.library_path.clone());
         let mut builder = self.builder.builder.take().unwrap();
         builder.add_thread_local(InputSystem::new(receiver, sender.clone()));
+        builder.add_thread_local(CleanNewMemberSystem);
         if self.builder.profiler {
             world.insert(TimeStatistic::new());
             builder.add_thread_local(PrintStatisticSystem);

@@ -137,7 +137,7 @@ where
         for (entity, pos, scene, _) in (&entities, &positions, &scene, &inserted).join() {
             let parent = scene.parent_entity();
             if let Some(sd) = scene_data.get(parent) {
-                if let Some(index) = sd.grid_index(pos) {
+                if let Some(index) = sd.grid_index(pos.x(), pos.y()) {
                     self.insert_grid_entity(parent, entity, index);
                     if let Err(err) = new_scene_member.insert(entity, NewSceneMember(None)) {
                         log::error!("insert new scene member failed:{}", err);
@@ -155,7 +155,7 @@ where
                 .map(|(parent, index)| (*parent, *index))
             {
                 if let Some(sd) = scene_data.get(parent) {
-                    if let Some(new_index) = sd.grid_index(pos) {
+                    if let Some(new_index) = sd.grid_index(pos.x(), pos.y()) {
                         if index == new_index {
                             continue;
                         }
