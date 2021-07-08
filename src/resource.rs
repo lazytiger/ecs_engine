@@ -4,7 +4,12 @@ use specs::{
     ReaderId, Tracked, WriteStorage,
 };
 use specs_hierarchy::{Hierarchy, HierarchyEvent, Parent};
-use std::{collections::HashMap, marker::PhantomData, sync::Mutex, time::Duration};
+use std::{
+    collections::HashMap,
+    marker::PhantomData,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 pub struct TimeStatistic {
     times: Mutex<HashMap<String, (Duration, Duration)>>,
@@ -84,6 +89,7 @@ where
         scene_hierarchy: ReadExpect<'a, SceneHierarchy>,
         mut new_scene_member: WriteStorage<'a, NewSceneMember>,
     ) {
+        let begin = Instant::now();
         let mut modified = BitSet::default();
         let mut inserted = BitSet::default();
         let mut removed = BitSet::default();
@@ -228,6 +234,8 @@ where
         empty_scene.iter().for_each(|entity| {
             self.scene_grids.remove(entity);
         });
+
+        log::info!("grid system cost:{}us", begin.elapsed().as_micros());
     }
 
     fn insert_grid_entity(&mut self, parent: Entity, entity: Entity, index: usize) {
