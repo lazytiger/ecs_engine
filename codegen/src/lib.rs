@@ -316,7 +316,6 @@ impl Config {
                 self.signature.ident.to_string().to_case(Case::UpperCamel)
             )
         };
-        let system_name_str = system_name.to_string();
         let system_fn = format_ident!("{}Fn", system_name);
 
         let lib_name = if let Some(lib_name) = &self.lib_name {
@@ -363,7 +362,6 @@ impl Config {
         let mut join_names = Vec::new();
         // names for foreach
         let mut foreach_names = Vec::new();
-        let mut input_storage = quote!();
         // names for storing input entities.
         let mut input_enames = Vec::new();
         let mut write_components = Vec::new();
@@ -438,7 +436,6 @@ impl Config {
                         func_names.push(quote!(#vname));
                         foreach_names.push(vname.clone());
                         input_names.push(quote!(mut #jname));
-                        input_storage = quote!(#jname);
                         system_data_types.push(quote!(::specs::WriteStorage<'a, #ty>));
                         input_enames.push(format_ident!("es"));
                     }

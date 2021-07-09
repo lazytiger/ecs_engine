@@ -6,6 +6,7 @@ use std::{
 };
 
 use byteorder::{BigEndian, ByteOrder};
+use convert_case::{Case, Casing};
 use derive_more::From;
 use proc_macro2::{Ident, TokenStream};
 use protobuf_codegen_pure::{Codegen, Customize};
@@ -255,60 +256,50 @@ impl Generator {
                 quote!(
                     #(mod #mods;)*
 
-                    use byteorder::{BigEndian, ByteOrder};
                     use ecs_engine::Output;
                     use protobuf::Message;
-                    use derive_more::From;
-                    pub type SelfSender = ecs_engine::SelfSender<Response>;
+                    use std::ops::{Deref, DerefMut};
 
-                    #(pub use #files::#names;)*
+                    #(pub type #names = Response<#files::#names>;)*
                     #(pub use #inners;)*
 
-                    #[derive(Debug, From, Clone)]
-                    pub enum Response {
-                        #(#names(#names),)*
+                    pub struct Response<T> {
+                        data:T
                     }
 
-                    impl Output for Response {
-                        #[cfg(feature="debug")]
-                        fn decode(mut buffer:&[u8]) ->Option<(u32, Self)> {
-                            let id = BigEndian::read_u32(buffer);
-                            buffer = &buffer[4..];
-                            let cmd = BigEndian::read_u32(buffer);
-                            buffer = &buffer[4..];
-                            match cmd {
-                            #(
-                                    #cmds => {
-                                        let mut data = #names::new();
-                                        data.merge_from_bytes(buffer).unwrap();
-                                        Some((id, Response::#names(data)))
-                                    },
-                            )*
-                                _ => {
-                                    log::error!("invalid cmd:{}", cmd);
-                                    None
-                                },
+                    impl<T> Deref for Response<T> {
+                        type Target = T;
+
+                        fn deref(&self) -> &Self::Target {
+                            &self.data
+                        }
+                    }
+
+                    impl<T> DerefMut for Response<T> {
+                        fn deref_mut(&mut self) -> &mut Self::Target {
+                            &mut self.data
+                        }
+                    }
+
+                    impl<T> From<T> for Response<T> {
+                        fn from(data: T) -> Self {
+                            Response { data }
+                        }
+                    }
+
+                    impl<T: Message> Response<T> {
+                        pub fn new() -> Self {
+                            Self { data: T::new() }
+                        }
+                    }
+
+                    #(
+                        impl Output for #names {
+                            fn cmd() -> u32 {
+                                #cmds
                             }
                         }
-
-                        fn encode(&self, id:u32) -> Vec<u8> {
-                            let mut data = vec![0u8;12];
-                            let cmd = match self {
-                                #(
-                                    Response::#names(r) => {
-                                        r.write_to_vec(&mut data).unwrap();
-                                        #cmds
-                                    },
-                                )*
-                            };
-                            let length = (data.len() - 4) as u32;
-                            let header = data.as_mut_slice();
-                            BigEndian::write_u32(header, length);
-                            BigEndian::write_u32(&mut header[4..], id);
-                            BigEndian::write_u32(&mut header[8..], cmd);
-                            data
-                        }
-                    }
+                    )*
                 )
                 .to_string()
             },
@@ -763,101 +754,106 @@ impl Generator {
     }
 
     fn gen_request(&self) -> Result<(), Error> {
-        self.gen_io_config("request", self.request_dir.clone(), | mods, names, files,inners, cmds| {
-            quote!(
+        self.gen_io_config(
+            "request",
+            self.request_dir.clone(),
+            |mods, names, files, inners, cmds| {
+                let vnames: Vec<_> = names
+                    .iter()
+                    .map(|name| format_ident!("{}", name.to_string().to_case(Case::Snake)))
+                    .collect();
+                let snames: Vec<_> = names
+                    .iter()
+                    .map(|name| format!("{}_input", name.to_string().to_case(Case::Snake)))
+                    .collect();
+                let cnames: Vec<_> = names
+                    .iter()
+                    .map(|name| format!("{}_cleanup", name.to_string().to_case(Case::Snake)))
+                    .collect();
+                quote!(
             #(mod #mods;)*
 
             use byteorder::{BigEndian, ByteOrder};
-            use derive_more::From;
-            use ecs_engine::{Closing, HashComponent, Input, NetToken, RequestIdent, ResponseSender, SelfSender, CleanStorageSystem};
+            use crossbeam::channel::Sender;
+            use ecs_engine::{
+                channel, CleanStorageSystem,  Closing, HandshakeSystem, HashComponent, Input,
+                InputSystem, NetToken, RequestIdent, SelfSender, CommandId
+            };
+            use mio::Token;
             use protobuf::Message;
-            use specs::{error::Error, World, WorldExt, DispatcherBuilder};
-            use crate::response::Response;
+            use specs::{DispatcherBuilder, Entity, };
 
             #(pub type #names = HashComponent<#files::#names>;)*
             #(pub use #inners;)*
 
-            #[derive(Debug, From)]
-            pub enum Request {
-                #(#names(#names),)*
-                None,
+            pub struct Request {
+                token:Sender<Token>,
+                close:Sender<(Entity, Closing)>,
+                #(#vnames: Sender<(Entity, #names)>,)*
             }
 
-            impl Input for Request {
-                type Output = Response;
-                fn add_component(self, ident: RequestIdent, world: &World, sender: ResponseSender<Self::Output>) ->Result<(), Error> {
-                    let entity = match ident {
-                        RequestIdent::Token(token) => {
-                            let entity = world.entities().create();
-                            sender.send_entity(token, entity);
-                            world.write_component::<NetToken>().insert(entity, NetToken::new(token.0)).map(|_|())?;
-                            world.write_component::<SelfSender<Self::Output>>().insert(entity, SelfSender::new(entity.id(), token, sender)).map(|_|())?;
-                            entity
-                        },
-                        RequestIdent::Close(entity) => {
-                            world.write_component::<Closing>().insert(entity, Closing).map(|_|())?;
-                            return Ok(());
-                        }
-                        RequestIdent::Entity(entity) => entity,
-                    };
-
-                    match self {
-                        #(Request::#names(c) => world.write_component::<#names>().insert(entity, c).map(|_|()),)*
-                        Request::None => Ok(()),
-                    }
-                }
-
-                fn setup(world:&mut World) {
-                    #(world.register::<#names>();)*
-                }
-
-                fn cleanup(builder:&mut DispatcherBuilder)  {
-                    #(builder.add(CleanStorageSystem::<#names>::default(), stringify!(#names), &[]);)*
-                }
-
-                fn decode(mut buffer:&[u8]) ->Option<Self> {
-                    if buffer.len() == 0 {
-                        return Some(Request::None);
-                    }
-
-                    let cmd = BigEndian::read_u32(buffer);
-                    buffer = &buffer[4..];
-                    match cmd {
+            impl Request {
+                pub fn new(bounded_size: usize, builder: &mut DispatcherBuilder) -> Self {
+                    let (token, receiver) = channel(bounded_size);
+                    builder.add(HandshakeSystem::new(receiver), "handshake", &[]);
+                    let (close, receiver) = channel(bounded_size);
+                    builder.add(InputSystem::new(receiver), "close_input", &[]);
                     #(
-                            #cmds => {
-                                let mut data = #files::#names::new();
-                                data.merge_from_bytes(buffer).unwrap();
-                                Some(Request::#names(#names::new(data)))
-                            },
+                        let (#vnames, receiver) = channel(bounded_size);
+                        builder.add(InputSystem::new(receiver), #snames, &[]);
                     )*
-                        _ => {
-                            log::error!("invalid cmd:{}", cmd);
-                            None
-                        },
+                    Self {
+                        token, close,
+                        #(#vnames,)*
                     }
                 }
 
-                #[cfg(feature="debug")]
-                fn encode(&self) -> Vec<u8> {
-                    let mut data = vec![0u8;8];
-                    let cmd = match self {
-                        #(
-                            Request::#names(r) => {
-                                r.write_to_vec(&mut data).unwrap();
-                                #cmds
-                            },
-                        )*
-                        Request::None => 0,
-                    };
-                    let length = (data.len() - 4) as u32;
-                    let header = data.as_mut_slice();
-                    BigEndian::write_u32(header, length);
-                    BigEndian::write_u32(&mut header[4..], cmd);
-                    data
+                pub fn cleanup(builder:&mut DispatcherBuilder) {
+                    #(
+                        builder.add(CleanStorageSystem::<#names>::default(), #cnames, &[#snames]);
+                    )*
+                }
+            }
+
+            #(
+                impl CommandId<#names> for Request {
+                    fn cmd(_:&#names) -> u32 {
+                        #cmds
+                    }
+                }
+            )*
+
+            impl Input for Request {
+                fn dispatch(&self, ident:RequestIdent, data:Vec<u8>) {
+                    if let Err(err) = match ident {
+                        RequestIdent::Token(token) => self.token.send(token).map_err(|err|format!("{}", err)),
+                        RequestIdent::Close(entity) => self.close.send((entity, Closing)).map_err(|err|format!("{}", err)),
+                        RequestIdent::Entity(entity) => {
+                            let mut buffer = data.as_slice();
+                            let cmd = BigEndian::read_u32(buffer);
+                            buffer = &buffer[4..];
+                            match cmd {
+                                #(
+                                    #cmds => {
+                                        let mut data = #files::#names::new();
+                                        data.merge_from_bytes(buffer).unwrap();
+                                        self.#vnames.send((entity, #names::new(data))).map_err(|err|format!("{}", err))
+                                    },
+                                )*
+                                    _ => {
+                                        log::error!("invalid cmd:{}", cmd);
+                                        Ok(())
+                                    },
+                            }
+                        }
+                    } {
+                            log::error!("send request to ecs failed:{}", err);
+                        }
                 }
             }
         ).to_string()
-        })
+            },
+        )
     }
 
     fn format_file(file: PathBuf) -> std::io::Result<()> {

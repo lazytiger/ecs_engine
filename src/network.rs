@@ -16,7 +16,6 @@ use specs::Entity;
 
 use crate::{Input, Output};
 use byteorder::{BigEndian, ByteOrder};
-use std::{marker::PhantomData, ops::Deref};
 
 /// 请求标识
 #[derive(Clone)]
@@ -466,7 +465,7 @@ impl Listener {
         }
     }
 
-    pub fn accept(&mut self, registry: &Registry, max_request_size: usize) -> Result<()> {
+    pub fn accept(&mut self, max_request_size: usize) -> Result<()> {
         loop {
             match self.listener.accept() {
                 Err(err) if err.kind() == ErrorKind::WouldBlock => {
@@ -477,13 +476,13 @@ impl Listener {
                 Ok((stream, addr)) => {
                     log::debug!("accept connection:{}", addr);
                     let conn = Connection::new(stream, addr, self.sender.clone(), max_request_size);
-                    self.insert(registry, conn);
+                    self.insert(conn);
                 }
             }
         }
     }
 
-    fn insert(&mut self, registry: &Registry, conn: Connection) {
+    fn insert(&mut self, conn: Connection) {
         let index = self.conns.insert(conn);
         let conn = self.conns.get_mut(index).unwrap();
         conn.set_token(Self::index2token(index));
@@ -584,7 +583,7 @@ pub fn run_network(
         listener.do_send(registry);
         for event in &events {
             match event.token() {
-                LISTENER => listener.accept(registry, max_request_size)?,
+                LISTENER => listener.accept(max_request_size)?,
                 ECS_SENDER => {}
                 _ => listener.do_event(event, &poll),
             }
@@ -597,7 +596,7 @@ pub fn run_network(
     }
 }
 
-fn channel<T>(bounded_size: usize) -> (Sender<T>, Receiver<T>) {
+pub fn channel<T>(bounded_size: usize) -> (Sender<T>, Receiver<T>) {
     if bounded_size == 0 {
         crossbeam::channel::unbounded()
     } else {

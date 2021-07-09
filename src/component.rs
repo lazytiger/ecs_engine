@@ -42,6 +42,10 @@ macro_rules! component {
             pub fn new(data: T) -> Self {
                 Self { data }
             }
+
+            pub fn into(self) -> T {
+                self.data
+            }
         }
     };
 }

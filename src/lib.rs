@@ -1,4 +1,5 @@
 #![feature(trait_alias)]
+#![feature(associated_type_bounds)]
 
 use std::{net::SocketAddr, ops::Deref};
 
@@ -11,7 +12,8 @@ pub(crate) mod resource;
 pub(crate) mod sync;
 pub(crate) mod system;
 
-use crate::{network::async_run, system::InputSystem};
+use crate::network::async_run;
+use byteorder::{BigEndian, ByteOrder};
 use specs::{DispatcherBuilder, System, World, WorldExt};
 use std::{thread::sleep, time::Duration};
 
@@ -22,31 +24,50 @@ pub use component::{
 pub use config::{Generator, SyncDirection};
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
-pub use network::{BytesSender, RequestIdent};
+pub use network::{channel, BytesSender, RequestIdent};
 pub use resource::SceneManager;
 pub use sync::{ChangeSet, DataSet};
-pub use system::{CleanStorageSystem, CommitChangeSystem, GridSystem, SceneSystem, TeamSystem};
+pub use system::{
+    CleanStorageSystem, CloseSystem, CommitChangeSystem, GridSystem, HandshakeSystem, InputSystem,
+    SceneSystem, TeamSystem,
+};
 
 use crate::{
     component::NewSceneMember,
     resource::TimeStatistic,
-    system::{CloseSystem, PrintStatisticSystem, StatisticSystem},
+    system::{PrintStatisticSystem, StatisticSystem},
 };
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
+use protobuf::Message;
 use specs::shred::SystemData;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Trait for requests enum type, it's an aggregation of all requests
-pub trait Input: Sized {
+pub trait Input {
     /// decode data and send by channels
     fn dispatch(&self, ident: RequestIdent, data: Vec<u8>);
 }
 
-pub trait Output: Sized {
-    fn encode(&self, id: u32) -> Vec<u8>;
+pub trait CommandId<T> {
+    fn cmd(_t: &T) -> u32;
+}
+
+pub trait Output: Deref<Target: Message> {
+    fn encode(&self, id: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 12];
+        self.write_to_vec(&mut data).unwrap();
+        let length = (data.len() - 4) as u32;
+        let cmd = Self::cmd();
+        let header = data.as_mut_slice();
+        BigEndian::write_u32(header, length);
+        BigEndian::write_u32(&mut header[4..], id);
+        BigEndian::write_u32(&mut header[8..], cmd);
+        data
+    }
+    fn cmd() -> u32;
 }
 
 /// 只读封装，如果某个变量从根本上不希望进行修改，则可以使用此模板类型
@@ -192,12 +213,16 @@ impl<'a, 'b> Engine<'a, 'b> {
         }
     }
 
-    pub fn run<I, S>(mut self, i: I, setup: S)
+    pub fn run<I, S>(mut self, setup: S)
     where
         I: Input + Send + Sync + 'static,
-        S: Fn(&mut World, &mut DispatcherBuilder, &DynamicManager),
+        S: Fn(&mut World, &mut DispatcherBuilder, &DynamicManager) -> I,
     {
-        let sender = async_run::<I>(
+        let mut builder = self.builder.builder.take().unwrap();
+        let mut world = World::new();
+        let dm = DynamicManager::new(self.builder.library_path.clone());
+        let request = setup(&mut world, &mut builder, &dm);
+        let sender = async_run(
             self.address,
             self.builder.idle_timeout,
             self.builder.read_timeout,
@@ -206,14 +231,11 @@ impl<'a, 'b> Engine<'a, 'b> {
             self.builder.max_request_size,
             self.builder.max_response_size,
             self.builder.bounded_size,
-            i,
+            request,
         );
-        let mut world = World::new();
         world.insert(sender.clone());
         world.register::<NetToken>();
 
-        let dm = DynamicManager::new(self.builder.library_path.clone());
-        let mut builder = self.builder.builder.take().unwrap();
         if self.builder.profiler {
             world.insert(TimeStatistic::new());
             builder.add_thread_local(PrintStatisticSystem);
@@ -225,10 +247,9 @@ impl<'a, 'b> Engine<'a, 'b> {
         }
         builder.add(CloseSystem, "close", &[]);
 
-        setup(&mut world, &mut builder, &dm);
         builder.add(
             CleanStorageSystem::<NewSceneMember>::default(),
-            "new_scene_member",
+            "new_scene_member_clean",
             &[],
         );
 
@@ -241,13 +262,10 @@ impl<'a, 'b> Engine<'a, 'b> {
         loop {
             // input
             let start_time = Instant::now();
-            dispatcher.dispatch_thread_local(&world);
-            world.maintain();
-            // systems
-            dispatcher.dispatch_par(&world);
+            dispatcher.dispatch(&world);
             world.maintain();
             // notify network
-            //sender.flush();
+            sender.flush();
             let elapsed = start_time.elapsed();
             if elapsed < self.sleep {
                 sleep(self.sleep - elapsed);

@@ -4,7 +4,7 @@ use crate::{
     network::BytesSender,
     resource::{SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
     sync::ChangeSet,
-    DataSet, DynamicManager, Input, NetToken, RequestIdent, SyncDirection,
+    DataSet, DynamicManager, NetToken, SyncDirection,
 };
 use crossbeam::channel::Receiver;
 use mio::Token;
@@ -23,6 +23,12 @@ use std::{
 
 pub struct HandshakeSystem {
     receiver: Receiver<Token>,
+}
+
+impl HandshakeSystem {
+    pub fn new(receiver: Receiver<Token>) -> Self {
+        Self { receiver }
+    }
 }
 
 impl<'a> System<'a> for HandshakeSystem {
