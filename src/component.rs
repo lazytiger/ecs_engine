@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::{Output, ResponseSender};
+use crate::{BytesSender, Output};
 use mio::Token;
 use specs::{
     BitSet, Component, DenseVecStorage, Entity, FlaggedStorage, HashMapStorage, Join, NullStorage,
@@ -73,29 +73,23 @@ impl Component for Closing {
 }
 
 /// 单用于发送数据给自己
-pub struct SelfSender<T> {
+pub struct SelfSender {
     id: u32,
     token: Token,
-    sender: ResponseSender<T>,
+    sender: BytesSender,
 }
 
-impl<T> Component for SelfSender<T>
-where
-    T: Sync + Send + 'static,
-{
+impl Component for SelfSender {
     type Storage = VecStorage<Self>;
 }
 
-impl<T> SelfSender<T>
-where
-    T: Output,
-{
-    pub fn new(id: u32, token: Token, sender: ResponseSender<T>) -> Self {
+impl SelfSender {
+    pub fn new(id: u32, token: Token, sender: BytesSender) -> Self {
         Self { id, token, sender }
     }
 
-    pub fn send_data(&self, data: impl Into<T>) {
-        self.sender.send_data(self.id, self.token, data);
+    pub fn send_data(&self, data: impl Output) {
+        self.sender.send_data(self.token, self.id, data);
     }
 
     pub fn send_close(&self, confirm: bool) {

@@ -22,7 +22,7 @@ pub use component::{
 pub use config::{Generator, SyncDirection};
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
-pub use network::{RequestIdent, ResponseSender};
+pub use network::{BytesSender, RequestIdent};
 pub use resource::SceneManager;
 pub use sync::{ChangeSet, DataSet};
 pub use system::{CleanStorageSystem, CommitChangeSystem, GridSystem, SceneSystem, TeamSystem};
@@ -41,33 +41,11 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Trait for requests enum type, it's an aggregation of all requests
 pub trait Input: Sized {
-    type Output: Output;
-    /// Match the actual type contains in enum, and add it to world.
-    /// If entity is none and current type is Login, a new entity will be created.
-    fn add_component(
-        self,
-        ident: RequestIdent,
-        world: &World,
-        sender: ResponseSender<Self::Output>,
-    ) -> std::result::Result<(), specs::error::Error>;
-
-    /// Register all the actual types as components
-    fn setup(world: &mut World);
-
-    /// clean all the input storage
-    fn cleanup(builder: &mut DispatcherBuilder);
-
-    /// Decode actual type as header specified.
-    fn decode(data: &[u8]) -> Option<Self>;
-
-    #[cfg(feature = "debug")]
-    fn encode(&self) -> Vec<u8>;
+    /// decode data and send by channels
+    fn dispatch(&self, ident: RequestIdent, data: Vec<u8>);
 }
 
 pub trait Output: Sized {
-    #[cfg(feature = "debug")]
-    fn decode(data: &[u8]) -> Option<(u32, Self)>;
-
     fn encode(&self, id: u32) -> Vec<u8>;
 }
 
@@ -214,13 +192,12 @@ impl<'a, 'b> Engine<'a, 'b> {
         }
     }
 
-    pub fn run<I, O, S>(mut self, setup: S)
+    pub fn run<I, S>(mut self, i: I, setup: S)
     where
-        I: Input<Output = O> + Send + Sync + 'static,
-        O: Clone + Send + Sync + 'static,
+        I: Input + Send + Sync + 'static,
         S: Fn(&mut World, &mut DispatcherBuilder, &DynamicManager),
     {
-        let (receiver, sender) = async_run::<I, O>(
+        let sender = async_run::<I>(
             self.address,
             self.builder.idle_timeout,
             self.builder.read_timeout,
@@ -229,15 +206,14 @@ impl<'a, 'b> Engine<'a, 'b> {
             self.builder.max_request_size,
             self.builder.max_response_size,
             self.builder.bounded_size,
+            i,
         );
         let mut world = World::new();
         world.insert(sender.clone());
-        world.insert(sender.deref().clone());
         world.register::<NetToken>();
 
         let dm = DynamicManager::new(self.builder.library_path.clone());
         let mut builder = self.builder.builder.take().unwrap();
-        builder.add_thread_local(InputSystem::new(receiver, sender.clone()));
         if self.builder.profiler {
             world.insert(TimeStatistic::new());
             builder.add_thread_local(PrintStatisticSystem);
@@ -247,7 +223,7 @@ impl<'a, 'b> Engine<'a, 'b> {
                 builder.add_thread_local(crate::system::FsNotifySystem::new(self.builder.library_path.clone(), false));
             }
         }
-        builder.add(CloseSystem::<O>::new(), "close", &[]);
+        builder.add(CloseSystem, "close", &[]);
 
         setup(&mut world, &mut builder, &dm);
         builder.add(
@@ -271,7 +247,7 @@ impl<'a, 'b> Engine<'a, 'b> {
             dispatcher.dispatch_par(&world);
             world.maintain();
             // notify network
-            sender.flush();
+            //sender.flush();
             let elapsed = start_time.elapsed();
             if elapsed < self.sleep {
                 sleep(self.sleep - elapsed);

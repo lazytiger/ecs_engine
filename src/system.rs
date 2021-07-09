@@ -1,16 +1,17 @@
 use crate::{
     component::{Closing, NewSceneMember, Position, SceneData, SceneMember, TeamMember},
     dynamic::{get_library_name, Library},
-    network::{BytesSender, RequestData, ResponseSender},
+    network::BytesSender,
     resource::{SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
     sync::ChangeSet,
     DataSet, DynamicManager, Input, NetToken, RequestIdent, SyncDirection,
 };
 use crossbeam::channel::Receiver;
+use mio::Token;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use protobuf::Mask;
 use specs::{
-    shred::SystemData, BitSet, Component, Entities, Join, LazyUpdate, Read, ReadExpect,
+    shred::SystemData, BitSet, Component, Entities, Entity, Join, LazyUpdate, Read, ReadExpect,
     ReadStorage, RunNow, System, Tracked, World, WorldExt, WriteExpect, WriteStorage,
 };
 use specs_hierarchy::{HierarchySystem, Parent};
@@ -20,69 +21,57 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-pub struct InputSystem<I, O> {
-    receiver: Receiver<RequestData<I>>,
-    sender: ResponseSender<O>,
+pub struct HandshakeSystem {
+    receiver: Receiver<Token>,
 }
 
-impl<I, O> InputSystem<I, O> {
-    pub fn new(receiver: Receiver<RequestData<I>>, sender: ResponseSender<O>) -> Self {
-        Self { receiver, sender }
+impl<'a> System<'a> for HandshakeSystem {
+    type SystemData = (
+        WriteStorage<'a, NetToken>,
+        Entities<'a>,
+        ReadExpect<'a, BytesSender>,
+    );
+
+    fn run(&mut self, (mut net_token, entities, sender): Self::SystemData) {
+        self.receiver.try_iter().for_each(|token| {
+            let entity = entities
+                .build_entity()
+                .with(NetToken::new(token.0), &mut net_token)
+                .build();
+            sender.send_entity(token, entity);
+            //TODO SelfSender
+        })
     }
 }
 
-impl<'a, I, O> RunNow<'a> for InputSystem<I, O>
+pub struct InputSystem<T> {
+    receiver: Receiver<(Entity, T)>,
+}
+
+impl<T> InputSystem<T> {
+    pub fn new(receiver: Receiver<(Entity, T)>) -> Self {
+        Self { receiver }
+    }
+}
+
+impl<'a, T> System<'a> for InputSystem<T>
 where
-    I: Input<Output = O> + Send + Sync + 'static,
-    O: Clone,
+    T: Component,
 {
-    fn run_now(&mut self, world: &'a World) {
-        //TODO how to control input frequency.
-        self.receiver.try_iter().for_each(|(ident, data)| {
-            log::debug!("new request found");
-            if let Some(data) = data {
-                if let Err(err) = data.add_component(ident, world, self.sender.clone()) {
-                    log::error!("add component failed:{}", err);
-                }
-            } else {
-                match ident {
-                    RequestIdent::Entity(entity) => {
-                        if let Some(token) = world.read_component::<NetToken>().get(entity) {
-                            self.sender.send_close(token.token(), false);
-                        } else {
-                            log::error!("entity:{:?} has no NetToken component", entity);
-                        }
-                    }
-                    RequestIdent::Token(token) => {
-                        self.sender.send_close(token, false);
-                    }
-                    _ => unreachable!("close shouldn't decode failed"),
-                }
+    type SystemData = WriteStorage<'a, T>;
+
+    fn run(&mut self, mut data: Self::SystemData) {
+        self.receiver.try_iter().for_each(|(entity, t)| {
+            if let Err(err) = data.insert(entity, t) {
+                log::error!("insert input failed:{}", err);
             }
         })
     }
-
-    fn setup(&mut self, world: &mut World) {
-        I::setup(world);
-    }
 }
 
-pub struct CloseSystem<T> {
-    _phantom: PhantomData<T>,
-}
+pub struct CloseSystem;
 
-impl<T> CloseSystem<T> {
-    pub fn new() -> Self {
-        Self {
-            _phantom: Default::default(),
-        }
-    }
-}
-
-impl<'a, T> System<'a> for CloseSystem<T>
-where
-    T: Send + Sync + 'static,
-{
+impl<'a> System<'a> for CloseSystem {
     type SystemData = (
         Entities<'a>,
         ReadStorage<'a, Closing>,
@@ -104,9 +93,7 @@ where
                 log::error!("delete entities failed:{}", err);
             }
             log::debug!("{} entities deleted", entities.len());
-            world
-                .read_resource::<ResponseSender<T>>()
-                .broadcast_close(tokens);
+            world.read_resource::<BytesSender>().broadcast_close(tokens);
         });
     }
 

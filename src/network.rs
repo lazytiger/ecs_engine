@@ -136,9 +136,13 @@ impl Connection {
         }
     }
 
-    fn setup(&mut self, token: Token, registry: &Registry) {
+    fn set_token(&mut self, token: Token) {
         self.token = token;
         self.ident.replace_token(token);
+        self.send_ecs(Vec::new());
+    }
+
+    fn setup(&mut self, registry: &Registry) {
         if let Err(err) = registry.register(
             &mut self.stream,
             self.token,
@@ -397,13 +401,15 @@ impl Connection {
         matches!(self.ecs_status, EcsStatus::CloseConfirmed)
     }
 
-    fn set_entity(&mut self, entity: Entity) {
+    fn set_entity(&mut self, entity: Entity, registry: &Registry) {
         log::debug!("[{}]got entity:{:?}", self.tag, entity);
         if let EcsStatus::TokenSent = self.ecs_status {
             self.ident.replace_entity(entity);
             self.ecs_status = EcsStatus::EntityReceived;
             if !matches!(self.conn_status, ConnStatus::Established) {
                 self.send_close();
+            } else {
+                self.setup(registry);
             }
         } else {
             log::error!(
@@ -427,7 +433,6 @@ pub enum Response {
 }
 
 pub type NetworkInputData = (RequestIdent, Vec<u8>);
-pub type RequestData<T> = (RequestIdent, Option<T>);
 pub type NetworkOutputData = (Vec<Token>, Response);
 
 struct Listener {
@@ -481,7 +486,7 @@ impl Listener {
     fn insert(&mut self, registry: &Registry, conn: Connection) {
         let index = self.conns.insert(conn);
         let conn = self.conns.get_mut(index).unwrap();
-        conn.setup(Self::index2token(index), registry);
+        conn.set_token(Self::index2token(index));
         log::info!("connection:{} installed", index);
     }
 
@@ -508,7 +513,7 @@ impl Listener {
                 if let Some(conn) = self.conns.get_mut(Self::token2index(token)) {
                     match &data {
                         Response::Data(data) => conn.do_send(registry, data.as_slice()),
-                        Response::Entity(entity) => conn.set_entity(*entity),
+                        Response::Entity(entity) => conn.set_entity(*entity, registry),
                         Response::Close(confirm) => conn.do_close(*confirm),
                     }
                 } else {
@@ -600,7 +605,7 @@ fn channel<T>(bounded_size: usize) -> (Sender<T>, Receiver<T>) {
     }
 }
 
-pub fn async_run<T, O>(
+pub fn async_run<T>(
     address: SocketAddr,
     idle_timeout: Duration,
     read_timeout: Duration,
@@ -609,14 +614,13 @@ pub fn async_run<T, O>(
     max_request_size: usize,
     max_response_size: usize,
     bounded_size: usize,
-) -> (Receiver<RequestData<T>>, ResponseSender<O>)
+    t: T,
+) -> BytesSender
 where
     T: Send + Input + 'static,
 {
     // network send data to decode, one-to-one
     let (network_sender, network_receiver) = channel::<NetworkInputData>(bounded_size);
-    // decode send data to ecs, one-to-one
-    let (request_sender, request_receiver) = channel::<RequestData<T>>(bounded_size);
     // ecs send data to network many-to-one
     let (response_sender, response_receiver) = channel::<NetworkOutputData>(bounded_size);
     let poll = Poll::new().unwrap();
@@ -637,24 +641,18 @@ where
         }
     });
     rayon::spawn(move || {
-        run_decode(request_sender, network_receiver);
+        run_decode(t, network_receiver);
     });
-    (
-        request_receiver,
-        ResponseSender::new(response_sender, waker, max_response_size),
-    )
+    BytesSender::new(response_sender, waker, max_response_size)
 }
 
-fn run_decode<T>(sender: Sender<RequestData<T>>, receiver: Receiver<NetworkInputData>)
+fn run_decode<T>(t: T, receiver: Receiver<NetworkInputData>)
 where
     T: Input,
 {
-    receiver.iter().for_each(|(ident, data)| {
-        let data = T::decode(data.as_slice());
-        if let Err(err) = sender.send((ident, data)) {
-            log::error!("send data to ecs failed {}", err);
-        }
-    })
+    receiver
+        .iter()
+        .for_each(|(ident, data)| t.dispatch(ident, data))
 }
 
 #[derive(Clone, Default)]
@@ -712,50 +710,15 @@ impl BytesSender {
         self.broadcast(tokens, Response::Data(bytes));
     }
 
+    pub fn broadcast_data(&self, tokens: Vec<Token>, id: u32, data: impl Output) {
+        self.broadcast_bytes(tokens, data.encode(id));
+    }
+
     pub fn send_bytes(&self, token: Token, bytes: Vec<u8>) {
         self.broadcast_bytes(vec![token], bytes);
     }
-}
 
-#[derive(Default, Clone)]
-pub struct ResponseSender<T> {
-    pub sender: BytesSender,
-    _phantom: PhantomData<T>,
-}
-
-impl<T> ResponseSender<T> {
-    pub fn new(
-        sender: Sender<NetworkOutputData>,
-        waker: Arc<Waker>,
-        max_response_size: usize,
-    ) -> Self {
-        Self {
-            sender: BytesSender::new(sender, waker, max_response_size),
-            _phantom: Default::default(),
-        }
-    }
-
-    pub fn flush(&self) {
-        self.sender.flush();
-    }
-}
-
-impl<T: Output> ResponseSender<T> {
-    pub fn broadcast_data<D: Into<T>>(&self, id: u32, tokens: Vec<Token>, data: D) {
-        let data = data.into().encode(id);
-        self.sender.broadcast_bytes(tokens, data);
-    }
-
-    pub fn send_data<D: Into<T>>(&self, id: u32, token: Token, data: D) {
-        let data = data.into().encode(id);
-        self.sender.broadcast_bytes(vec![token], data);
-    }
-}
-
-impl<T> Deref for ResponseSender<T> {
-    type Target = BytesSender;
-
-    fn deref(&self) -> &Self::Target {
-        &self.sender
+    pub fn send_data(&self, token: Token, id: u32, data: impl Output) {
+        self.send_bytes(token, data.encode(id));
     }
 }
