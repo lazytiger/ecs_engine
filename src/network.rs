@@ -138,6 +138,7 @@ impl Connection {
     fn set_token(&mut self, token: Token) {
         self.token = token;
         self.ident.replace_token(token);
+        log::debug!("[{}]send Token to ecs", self.tag);
         self.send_ecs(Vec::new());
     }
 
@@ -216,7 +217,6 @@ impl Connection {
     }
 
     fn do_event(&mut self, event: &Event, registry: &Registry) {
-        log::debug!("[{}]connection has event:{:?}", self.tag, event);
         self.last_time = Instant::now();
         if event.is_read_closed() {
             self.shutdown();
@@ -237,7 +237,10 @@ impl Connection {
         let mut bytes = [0u8; 1024];
         loop {
             match self.stream.read(&mut bytes) {
-                Ok(size) if size > 0 => self.read_bytes.extend_from_slice(&bytes[..size]),
+                Ok(size) if size > 0 => {
+                    self.read_bytes.extend_from_slice(&bytes[..size]);
+                    log::debug!("[{}]read {} bytes data", self.tag, size);
+                }
                 Ok(_) => {
                     log::error!("[{}]read zero byte, connection closed", self.tag);
                     self.shutdown();
@@ -278,6 +281,7 @@ impl Connection {
                 }
                 read_bytes = &read_bytes[4..];
                 new_header = true;
+                log::debug!("new request found with body length:{}", self.length);
             } else {
                 break;
             }

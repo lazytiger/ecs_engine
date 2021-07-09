@@ -235,7 +235,7 @@ where
             self.scene_grids.remove(entity);
         });
 
-        log::info!("grid system cost:{}us", begin.elapsed().as_micros());
+        //log::info!("grid system cost:{}us", begin.elapsed().as_micros());
     }
 
     fn insert_grid_entity(&mut self, parent: Entity, entity: Entity, index: usize) {

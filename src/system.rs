@@ -4,7 +4,7 @@ use crate::{
     network::BytesSender,
     resource::{SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
     sync::ChangeSet,
-    DataSet, DynamicManager, NetToken, SyncDirection,
+    DataSet, DynamicManager, NetToken, SelfSender, SyncDirection,
 };
 use crossbeam::channel::Receiver;
 use mio::Token;
@@ -36,16 +36,20 @@ impl<'a> System<'a> for HandshakeSystem {
         WriteStorage<'a, NetToken>,
         Entities<'a>,
         ReadExpect<'a, BytesSender>,
+        WriteStorage<'a, SelfSender>,
     );
 
-    fn run(&mut self, (mut net_token, entities, sender): Self::SystemData) {
+    fn run(&mut self, (mut net_token, entities, sender, mut ss): Self::SystemData) {
         self.receiver.try_iter().for_each(|token| {
             let entity = entities
                 .build_entity()
                 .with(NetToken::new(token.0), &mut net_token)
                 .build();
             sender.send_entity(token, entity);
-            //TODO SelfSender
+            if let Err(err) = ss.insert(entity, SelfSender::new(entity.id(), token, sender.clone()))
+            {
+                log::error!("insert SelfSender failed:{}", err);
+            }
         })
     }
 }
