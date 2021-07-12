@@ -1,12 +1,13 @@
 use crate::{
     component::{Closing, NewSceneMember, Position, SceneData, SceneMember, TeamMember},
+    config::StorageType::DefaultVec,
     dynamic::{get_library_name, Library},
     network::BytesSender,
     resource::{SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
     sync::ChangeSet,
     DataSet, DynamicManager, NetToken, SelfSender, SyncDirection,
 };
-use crossbeam::channel::Receiver;
+use crossbeam::channel::{Receiver, Sender};
 use mio::Token;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use protobuf::Mask;
@@ -75,14 +76,15 @@ where
         self.receiver
             .try_iter()
             .for_each(|(entity, t)| match data.insert(entity, t) {
-                Ok(Some(t)) => {
-                    log::warn!("request:{:?} already exists", t);
+                Ok(t) => {
+                    if let Some(t) = t {
+                        log::warn!("request:{:?} already exists", t);
+                    }
                 }
                 Err(err) => {
                     log::error!("insert input failed:{}", err);
                 }
-                _ => {}
-            })
+            });
     }
 }
 
@@ -102,8 +104,10 @@ impl<'a> System<'a> for CloseSystem {
             .join()
             .filter_map(|(entity, token, closing)| {
                 if closing.0 {
+                    log::debug!("entity:{} has shutdown network", entity.id());
                     Some((entity, token.token()))
                 } else {
+                    log::debug!("entity:{} has invalid data", entity.id());
                     sender.send_close(token.token(), false);
                     None
                 }
@@ -387,16 +391,34 @@ impl<'a> System<'a> for PrintStatisticSystem {
 
 #[derive(Default)]
 pub struct CleanStorageSystem<T> {
+    sender: Option<Sender<Vec<Entity>>>,
     _phantom: PhantomData<T>,
+}
+
+impl<T> CleanStorageSystem<T> {
+    pub fn new(sender: Sender<Vec<Entity>>) -> Self {
+        Self {
+            sender: Some(sender),
+            _phantom: Default::default(),
+        }
+    }
 }
 
 impl<'a, T> System<'a> for CleanStorageSystem<T>
 where
     T: Component,
 {
-    type SystemData = WriteStorage<'a, T>;
+    type SystemData = (Entities<'a>, WriteStorage<'a, T>);
 
-    fn run(&mut self, mut data: Self::SystemData) {
-        data.drain().join().for_each(|_| {});
+    fn run(&mut self, (entities, mut data): Self::SystemData) {
+        let entities = (&entities, data.drain())
+            .join()
+            .map(|(entity, _)| entity)
+            .collect();
+        if let Some(sender) = &self.sender {
+            if let Err(err) = sender.send(entities) {
+                log::error!("send next ticket to decode failed:{}", err);
+            }
+        }
     }
 }

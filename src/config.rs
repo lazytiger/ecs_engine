@@ -774,19 +774,28 @@ impl Generator {
             #(mod #mods;)*
 
             use byteorder::{BigEndian, ByteOrder};
-            use crossbeam::channel::Sender;
+            use crossbeam::channel::{Receiver, Sender};
             use ecs_engine::{
                 channel, CleanStorageSystem,  Closing, HandshakeSystem, HashComponent, Input,
-                InputSystem, NetToken, RequestIdent, SelfSender, CommandId
+                InputSystem, RequestIdent, CommandId
             };
             use mio::Token;
             use protobuf::Message;
             use specs::{DispatcherBuilder, Entity, };
+            use std::collections::{HashMap, VecDeque};
 
             #(pub type #names = HashComponent<#files::#names>;)*
             #(pub use #inners;)*
 
+            enum AllRequest {
+                #(#names(#names),)*
+                Closing(Closing),
+            }
+
             pub struct Request {
+                input_cache: HashMap<Entity, (bool, VecDeque<AllRequest>)>,
+                next_receiver: Receiver<Vec<Entity>>,
+                next_sender: Sender<Vec<Entity>>,
                 token:Sender<Token>,
                 close:Sender<(Entity, Closing)>,
                 #(#vnames: Sender<(Entity, #names)>,)*
@@ -794,6 +803,8 @@ impl Generator {
 
             impl Request {
                 pub fn new(bounded_size: usize, builder: &mut DispatcherBuilder) -> Self {
+                    let (next_sender, next_receiver) = channel(0);
+                    let input_cache = HashMap::new();
                     let (token, receiver) = channel(bounded_size);
                     builder.add(HandshakeSystem::new(receiver), "handshake", &[]);
                     let (close, receiver) = channel(bounded_size);
@@ -803,14 +814,14 @@ impl Generator {
                         builder.add(InputSystem::new(receiver), #snames, &[]);
                     )*
                     Self {
-                        token, close,
+                        token, close, next_receiver, next_sender, input_cache,
                         #(#vnames,)*
                     }
                 }
 
-                pub fn cleanup(builder:&mut DispatcherBuilder) {
+                pub fn cleanup(&self, builder:&mut DispatcherBuilder) {
                     #(
-                        builder.add(CleanStorageSystem::<#names>::default(), #cnames, &[#snames]);
+                        builder.add(CleanStorageSystem::<#names>::new(self.next_sender.clone()), #cnames, &[#snames]);
                     )*
                 }
             }
@@ -824,11 +835,30 @@ impl Generator {
             )*
 
             impl Input for Request {
-                fn dispatch(&self, ident:RequestIdent, data:Vec<u8>) {
+                fn dispatch(&mut self, ident:RequestIdent, data:Vec<u8>) {
                     if let Err(err) = match ident {
                         RequestIdent::Token(token) => self.token.send(token).map_err(|err|format!("{}", err)),
-                        RequestIdent::Close(entity) => self.close.send((entity, Closing(true))).map_err(|err|format!("{}", err)),
+                        RequestIdent::Close(entity) => {
+                            if !self.input_cache.contains_key(&entity) {
+                                self.input_cache.insert(entity, (true, VecDeque::new()));
+                            }
+                            let (next, cache) = self.input_cache.get_mut(&entity).unwrap();
+                            if *next {
+                                self.input_cache.remove(&entity);
+                                self.close
+                                    .send((entity, Closing(true)))
+                                    .map_err(|err| format!("{}", err))
+                            } else {
+                                cache.push_back(AllRequest::Closing(Closing(true)));
+                                Ok(())
+                            }
+                        },
                         RequestIdent::Entity(entity) => {
+                            if !self.input_cache.contains_key(&entity) {
+                                self.input_cache.insert(entity, (true, VecDeque::new()));
+                            }
+                            let (next, cache) = self.input_cache.get_mut(&entity).unwrap();
+
                             let mut buffer = data.as_slice();
                             let cmd = BigEndian::read_u32(buffer);
                             buffer = &buffer[4..];
@@ -837,7 +867,20 @@ impl Generator {
                                     #cmds => {
                                         let mut data = #files::#names::new();
                                         data.merge_from_bytes(buffer).unwrap();
-                                        self.#vnames.send((entity, #names::new(data))).map_err(|err|format!("{}", err))
+                                        let data = #names::new(data);
+                                        if *next && cache.is_empty() {
+                                            *next = false;
+                                            self.#vnames.send((entity, data)).map_err(|err|format!("{}", err))
+                                        } else {
+                                            if let Some(AllRequest::#names(_)) = cache.back() {
+                                                cache.pop_back();
+                                            }
+                                            cache.push_back(AllRequest::#names(data));
+                                            if *next {
+                                                self.do_next(entity);
+                                            }
+                                            Ok(())
+                                        }
                                     },
                                 )*
                                     _ => {
@@ -851,6 +894,34 @@ impl Generator {
                     } {
                             log::error!("send request to ecs failed:{}", err);
                         }
+                }
+
+                fn next_receiver(&self) -> Receiver<Vec<Entity>> {
+                    self.next_receiver.clone()
+                }
+
+                fn do_next(&mut self, entity:Entity) {
+                    let mut clean = false;
+                    if let Some((next, cache)) = self.input_cache.get_mut(&entity) {
+                        if cache.is_empty() {
+                            *next = true;
+                        } else {
+                            if let Err(err) = {
+                                match cache.pop_front().unwrap() {
+                                    #(AllRequest::#names(data) => self.#vnames.send((entity, data)).map_err(|err|format!("{}", err)),)*
+                                    AllRequest::Closing(data) => {
+                                        clean = true;
+                                        self.close.send((entity, data)).map_err(|err|format!("{}", err))
+                                    }
+                                }
+                            } {
+                                log::error!("send request to ecs failed:{}", err);
+                            }
+                        }
+                    }
+                    if clean {
+                        self.input_cache.remove(&entity);
+                    }
                 }
             }
         ).to_string()

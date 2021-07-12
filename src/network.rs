@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossbeam::channel::{Receiver, Sender};
+use crossbeam::channel::{Receiver, Select, Sender};
 use mio::{
     event::Event,
     net::{TcpListener, TcpStream},
@@ -649,13 +649,29 @@ where
     BytesSender::new(response_sender, waker, max_response_size)
 }
 
-fn run_decode<T>(t: T, receiver: Receiver<NetworkInputData>)
+fn run_decode<T>(mut t: T, net_receiver: Receiver<NetworkInputData>)
 where
     T: Input,
 {
-    receiver
-        .iter()
-        .for_each(|(ident, data)| t.dispatch(ident, data))
+    let ecs_receiver = t.next_receiver();
+    let mut select = Select::new();
+    let net_index = select.recv(&net_receiver);
+    let ecs_index = select.recv(&ecs_receiver);
+    loop {
+        let operation = select.select();
+        log::debug!("select receiver:{}", operation.index());
+        match operation.index() {
+            i if i == net_index => match operation.recv(&net_receiver) {
+                Ok((ident, data)) => t.dispatch(ident, data),
+                Err(err) => log::error!("receive from network failed:{}", err),
+            },
+            i if i == ecs_index => match operation.recv(&ecs_receiver) {
+                Ok(entities) => entities.into_iter().for_each(|entity| t.do_next(entity)),
+                Err(err) => log::error!("receive from ecs failed:{}", err),
+            },
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[derive(Clone, Default)]

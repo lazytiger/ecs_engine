@@ -14,7 +14,8 @@ pub(crate) mod system;
 
 use crate::network::async_run;
 use byteorder::{BigEndian, ByteOrder};
-use specs::{DispatcherBuilder, System, World, WorldExt};
+use crossbeam::channel::Receiver;
+use specs::{DispatcherBuilder, Entity, System, World, WorldExt};
 use std::{thread::sleep, time::Duration};
 
 pub use codegen::{export, init_log, system};
@@ -48,7 +49,11 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// Trait for requests enum type, it's an aggregation of all requests
 pub trait Input {
     /// decode data and send by channels
-    fn dispatch(&self, ident: RequestIdent, data: Vec<u8>);
+    fn dispatch(&mut self, ident: RequestIdent, data: Vec<u8>);
+
+    fn next_receiver(&self) -> Receiver<Vec<Entity>>;
+
+    fn do_next(&mut self, entity: Entity);
 }
 
 pub trait CommandId<T> {
