@@ -389,7 +389,7 @@ impl Connection {
     fn close(&mut self) {
         match self.ecs_status {
             EcsStatus::CloseSent => {
-                log::debug!("[{}]ecs confirm closed, it's ok to release now", self.tag);
+                log::info!("[{}]ecs confirm closed, it's ok to release now", self.tag);
                 self.ecs_status = EcsStatus::CloseConfirmed;
             }
             _ => log::error!(
