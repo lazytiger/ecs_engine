@@ -153,6 +153,8 @@ pub struct Generator {
     response_dir: PathBuf,
     /// 用于存储生成的dataset pb文件
     dataset_dir: PathBuf,
+    /// 请求是否需要保持顺序
+    keep_order: bool,
 }
 
 #[derive(Debug, From)]
@@ -198,6 +200,11 @@ impl Generator {
 
     pub fn dataset_dir(&mut self, dataset_dir: impl AsRef<Path>) -> &mut Self {
         self.dataset_dir = dataset_dir.as_ref().to_owned();
+        self
+    }
+
+    pub fn keep_order(&mut self) -> &mut Self {
+        self.keep_order = true;
         self
     }
 
@@ -754,6 +761,7 @@ impl Generator {
     }
 
     fn gen_request(&self) -> Result<(), Error> {
+        let keep_order = self.keep_order;
         self.gen_io_config(
             "request",
             self.request_dir.clone(),
@@ -770,71 +778,27 @@ impl Generator {
                     .iter()
                     .map(|name| format!("{}_cleanup", name.to_string().to_case(Case::Snake)))
                     .collect();
+
+            let cleanup = if keep_order {
                 quote!(
-            #(mod #mods;)*
-
-            use byteorder::{BigEndian, ByteOrder};
-            use crossbeam::channel::{Receiver, Sender};
-            use ecs_engine::{
-                channel, CleanStorageSystem,  Closing, HandshakeSystem, HashComponent, Input,
-                InputSystem, RequestIdent, CommandId
-            };
-            use mio::Token;
-            use protobuf::Message;
-            use specs::{DispatcherBuilder, Entity, };
-            use std::collections::{HashMap, VecDeque};
-
-            #(pub type #names = HashComponent<#files::#names>;)*
-            #(pub use #inners;)*
-
-            enum AllRequest {
-                #(#names(#names),)*
-                Closing(Closing),
-            }
-
-            pub struct Request {
-                input_cache: HashMap<Entity, (bool, VecDeque<AllRequest>)>,
-                next_receiver: Receiver<Vec<Entity>>,
-                next_sender: Sender<Vec<Entity>>,
-                token:Sender<Token>,
-                close:Sender<(Entity, Closing)>,
-                #(#vnames: Sender<(Entity, #names)>,)*
-            }
-
-            impl Request {
-                pub fn new(bounded_size: usize, builder: &mut DispatcherBuilder) -> Self {
-                    let (next_sender, next_receiver) = channel(0);
-                    let input_cache = HashMap::new();
-                    let (token, receiver) = channel(bounded_size);
-                    builder.add(HandshakeSystem::new(receiver), "handshake", &[]);
-                    let (close, receiver) = channel(bounded_size);
-                    builder.add(InputSystem::new(receiver), "close_input", &[]);
-                    #(
-                        let (#vnames, receiver) = channel(bounded_size);
-                        builder.add(InputSystem::new(receiver), #snames, &[]);
-                    )*
-                    Self {
-                        token, close, next_receiver, next_sender, input_cache,
-                        #(#vnames,)*
-                    }
-                }
-
                 pub fn cleanup(&self, builder:&mut DispatcherBuilder) {
                     #(
                         builder.add(CleanStorageSystem::<#names>::new(self.next_sender.clone()), #cnames, &[#snames]);
                     )*
                 }
-            }
-
-            #(
-                impl CommandId<#names> for Request {
-                    fn cmd(_:&#names) -> u32 {
-                        #cmds
-                    }
+                )
+            } else {
+                quote!(
+                pub fn cleanup(&self, builder:&mut DispatcherBuilder) {
+                    #(
+                        builder.add(CleanStorageSystem::<#names>::default(), #cnames, &[#snames]);
+                    )*
                 }
-            )*
+                )
+            };
 
-            impl Input for Request {
+            let dispatch = if keep_order {
+                quote!(
                 fn dispatch(&mut self, ident:RequestIdent, data:Vec<u8>) {
                     if let Err(err) = match ident {
                         RequestIdent::Token(token) => self.token.send(token).map_err(|err|format!("{}", err)),
@@ -872,10 +836,11 @@ impl Generator {
                                             *next = false;
                                             self.#vnames.send((entity, data)).map_err(|err|format!("{}", err))
                                         } else {
-                                            if let Some(AllRequest::#names(_)) = cache.back() {
-                                                cache.pop_back();
+                                            if let Some(AllRequest::#names(old)) = cache.back_mut() {
+                                                *old = data;
+                                            } else {
+                                                cache.push_back(AllRequest::#names(data));
                                             }
-                                            cache.push_back(AllRequest::#names(data));
                                             if *next {
                                                 self.do_next(entity);
                                             }
@@ -887,20 +852,67 @@ impl Generator {
                                         log::error!("invalid cmd:{}", cmd);
                                         self.close
                                             .send((entity, Closing(false)))
-                                            .map_err(|err| format!("{}", err))     
+                                            .map_err(|err| format!("{}", err))
                                     },
                             }
                         }
                     } {
                             log::error!("send request to ecs failed:{}", err);
+                    }
+                }
+                )
+            } else {
+                quote!(
+                fn dispatch(&mut self, ident:RequestIdent, data:Vec<u8>) {
+                    if let Err(err) = match ident {
+                        RequestIdent::Token(token) => self.token.send(token).map_err(|err|format!("{}", err)),
+                        RequestIdent::Close(entity) => self.close
+                            .send((entity, Closing(true)))
+                            .map_err(|err| format!("{}", err)),
+                        RequestIdent::Entity(entity) => {
+                            let mut buffer = data.as_slice();
+                            let cmd = BigEndian::read_u32(buffer);
+                            buffer = &buffer[4..];
+                            match cmd {
+                                #(
+                                    #cmds => {
+                                        let mut data = #files::#names::new();
+                                        data.merge_from_bytes(buffer).unwrap();
+                                        let data = #names::new(data);
+                                        self.#vnames.send((entity, data)).map_err(|err|format!("{}", err))
+                                    },
+                                )*
+                                    _ => {
+                                        log::error!("invalid cmd:{}", cmd);
+                                        self.close
+                                            .send((entity, Closing(false)))
+                                            .map_err(|err| format!("{}", err))
+                                    },
+                            }
                         }
+                    } {
+                            log::error!("send request to ecs failed:{}", err);
+                    }
                 }
+                )
+            };
 
-                fn next_receiver(&self) -> Receiver<Vec<Entity>> {
-                    self.next_receiver.clone()
-                }
+                let all_request = if keep_order {
+                    quote!(
+                        enum AllRequest {
+                            #(#names(#names),)*
+                            Closing(Closing),
+                        }
+                    )
+                } else {
+                    quote!(
+                        enum AllRequest {}
+                    )
+                };
 
-                fn do_next(&mut self, entity:Entity) {
+                let do_next = if keep_order {
+                    quote!(
+                        fn do_next(&mut self, entity:Entity) {
                     let mut clean = false;
                     if let Some((next, cache)) = self.input_cache.get_mut(&entity) {
                         if cache.is_empty() {
@@ -923,6 +935,81 @@ impl Generator {
                         self.input_cache.remove(&entity);
                     }
                 }
+                    )
+                } else {
+                    quote!(
+                       fn do_next(&mut self, entity:Entity) { }
+                    )
+                };
+
+                quote!(
+            #(mod #mods;)*
+
+            use byteorder::{BigEndian, ByteOrder};
+            use crossbeam::channel::{Receiver, Sender};
+            use ecs_engine::{
+                channel, CleanStorageSystem,  Closing, HandshakeSystem, HashComponent, Input,
+                InputSystem, RequestIdent, CommandId
+            };
+            use mio::Token;
+            use protobuf::Message;
+            use specs::{DispatcherBuilder, Entity, };
+            use std::collections::{HashMap, VecDeque};
+
+            #(pub type #names = HashComponent<#files::#names>;)*
+            #(pub use #inners;)*
+
+            #all_request
+
+            pub struct Request {
+                input_cache: HashMap<Entity, (bool, VecDeque<AllRequest>)>,
+                next_receiver: Receiver<Vec<Entity>>,
+                next_sender: Sender<Vec<Entity>>,
+                token:Sender<Token>,
+                close:Sender<(Entity, Closing)>,
+                #(#vnames: Sender<(Entity, #names)>,)*
+            }
+
+            impl Request {
+                pub fn new(bounded_size: usize, builder: &mut DispatcherBuilder) -> Self {
+                    let (next_sender, next_receiver) = channel(0);
+                    let input_cache = HashMap::new();
+                    let (token, receiver) = channel(bounded_size);
+                    builder.add(HandshakeSystem::new(receiver), "handshake", &[]);
+                    let (close, receiver) = channel(bounded_size);
+                    builder.add(InputSystem::new(receiver), "close_input", &[]);
+                    #(
+                        let (#vnames, receiver) = channel(bounded_size);
+                        builder.add(InputSystem::new(receiver), #snames, &[]);
+                    )*
+                    Self {
+                        token, close, next_receiver, next_sender, input_cache,
+                        #(#vnames,)*
+                    }
+                }
+
+                #cleanup
+
+            }
+
+            #(
+                impl CommandId<#names> for Request {
+                    fn cmd(_:&#names) -> u32 {
+                        #cmds
+                    }
+                }
+            )*
+
+            impl Input for Request {
+
+                #dispatch
+
+                fn next_receiver(&self) -> Receiver<Vec<Entity>> {
+                    self.next_receiver.clone()
+                }
+
+                #do_next
+
             }
         ).to_string()
             },
