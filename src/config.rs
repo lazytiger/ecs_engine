@@ -827,7 +827,7 @@ impl Generator {
                 fn dispatch(&self, ident:RequestIdent, data:Vec<u8>) {
                     if let Err(err) = match ident {
                         RequestIdent::Token(token) => self.token.send(token).map_err(|err|format!("{}", err)),
-                        RequestIdent::Close(entity) => self.close.send((entity, Closing)).map_err(|err|format!("{}", err)),
+                        RequestIdent::Close(entity) => self.close.send((entity, Closing(true))).map_err(|err|format!("{}", err)),
                         RequestIdent::Entity(entity) => {
                             let mut buffer = data.as_slice();
                             let cmd = BigEndian::read_u32(buffer);
@@ -842,7 +842,9 @@ impl Generator {
                                 )*
                                     _ => {
                                         log::error!("invalid cmd:{}", cmd);
-                                        Ok(())
+                                        self.close
+                                            .send((entity, Closing(false)))
+                                            .map_err(|err| format!("{}", err))     
                                     },
                             }
                         }

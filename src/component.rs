@@ -69,11 +69,11 @@ impl NetToken {
     }
 }
 
-#[derive(Default)]
-pub struct Closing;
+#[derive(Default, Debug)]
+pub struct Closing(pub bool);
 
 impl Component for Closing {
-    type Storage = NullStorage<Self>;
+    type Storage = HashMapStorage<Self>;
 }
 
 /// 单用于发送数据给自己

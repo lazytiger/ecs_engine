@@ -16,6 +16,7 @@ use specs::{
 };
 use specs_hierarchy::{HierarchySystem, Parent};
 use std::{
+    fmt::Debug,
     marker::PhantomData,
     ops::{Deref, DerefMut},
     time::{Duration, UNIX_EPOCH},
@@ -66,16 +67,22 @@ impl<T> InputSystem<T> {
 
 impl<'a, T> System<'a> for InputSystem<T>
 where
-    T: Component,
+    T: Component + Debug,
 {
     type SystemData = WriteStorage<'a, T>;
 
     fn run(&mut self, mut data: Self::SystemData) {
-        self.receiver.try_iter().for_each(|(entity, t)| {
-            if let Err(err) = data.insert(entity, t) {
-                log::error!("insert input failed:{}", err);
-            }
-        })
+        self.receiver
+            .try_iter()
+            .for_each(|(entity, t)| match data.insert(entity, t) {
+                Ok(Some(t)) => {
+                    log::warn!("request:{:?} already exists", t);
+                }
+                Err(err) => {
+                    log::error!("insert input failed:{}", err);
+                }
+                _ => {}
+            })
     }
 }
 
@@ -84,15 +91,23 @@ pub struct CloseSystem;
 impl<'a> System<'a> for CloseSystem {
     type SystemData = (
         Entities<'a>,
-        ReadStorage<'a, Closing>,
+        WriteStorage<'a, Closing>,
         ReadStorage<'a, NetToken>,
         Read<'a, LazyUpdate>,
+        Read<'a, BytesSender>,
     );
 
-    fn run(&mut self, (entities, closing, tokens, lazy_update): Self::SystemData) {
-        let (entities, tokens): (Vec<_>, Vec<_>) = (&entities, &tokens, &closing)
+    fn run(&mut self, (entities, mut closing, tokens, lazy_update, sender): Self::SystemData) {
+        let (entities, tokens): (Vec<_>, Vec<_>) = (&entities, &tokens, closing.drain())
             .join()
-            .map(|(entity, token, _)| (entity, token.token()))
+            .filter_map(|(entity, token, closing)| {
+                if closing.0 {
+                    Some((entity, token.token()))
+                } else {
+                    sender.send_close(token.token(), false);
+                    None
+                }
+            })
             .unzip();
         if entities.is_empty() {
             return;
