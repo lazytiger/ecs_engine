@@ -253,6 +253,7 @@ where
                     NetToken::tokens(&token, &around)
                 };
                 sender.broadcast_bytes(tokens, bytes)
+                //TODO send around full data to current member
             } else {
             }
         }

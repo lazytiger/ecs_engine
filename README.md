@@ -200,21 +200,21 @@
 * 需要时再创建
 这种情况下，上面的函数应该需要有个返回值，如果有返回值则进行创建，或者直接用LazyUpdate来进行，这种方式的缺点在于组件只能在下一帧才能被访问到
 
-## systemn属性
+## system属性
 system属性用于生成各种模板代码，主要功能如下：
 * System对象，包括动态链接支持以及状态字段
 * 实现setup代码，包括component的注册以及动态库初始化，最后把自己加入scheduler里
 * 实现System接口，具体包括
-    * 定义用于收集已经处理过的entity的vector，如果有input的话
+    * ~~定义用于收集已经处理过的entity的vector，如果有input的话~~
     * 定义于用收集output结果的vector，如果有output的话
     * 循环整个定义的component，并调用实际处理函数，如果有output的话，匹配时取反
     * 根据返回值收集新的component
-    * 清除这个input storage里已经处理过的component，然后再查看是否还有未匹配的input，如果有则打日志报错
-    * 插入收集到的所有新的component并插入
-    * 如果WriteComponent确实被触发，则设置这个Component为dirty，如果确认一个类是否是changeset?
+    * ~~清除这个input storage里已经处理过的component，然后再查看是否还有未匹配的input，如果有则打日志报错~~
+    * 插入收集到的所有新的component
+    * 如果WriteComponent确实被触发，则设置这个Component为dirty
 ### system属性补充  
 关于各种目标的示例在上面已经讲过了，下面再补充一些其他的未涉及到的属性
-* resource
+* resource/expect
 ```rust
 #[system]
 fn test(#[resource] counter:&usize, user:&UserInfo){}
@@ -267,6 +267,9 @@ fn test(user:&UserInfo){}
 * 自动生成转成extern函数，并加上no_mangle的标签
 * 自动加上catch_unwind防止panic
 * 添加类型检查代码以备类型检查
+
+#init_log
+自动生成初始化日志接口，供dll加载时初始化调用
 
 # 其他关键模块
 ## 网络层
@@ -412,9 +415,9 @@ TBD
 * ~~同一个component不能同时出现在input和output里，加上这个检查~~
 * ~~有可能input有没匹配上的，需要加日志~~
 * 离线用户数据如何处理？
-* 数据集，包括标脏以及同步
+* ~~数据集，包括标脏以及同步~~
 * 数据库，包括持久化以及拉取
-* 读取请求数据从RunNow移到System里去，利用SystemData生成
-* 增加统计类System支持
+* ~~读取请求数据从RunNow移到System里去，利用SystemData生成~~
+* ~~增加统计类System支持~~
 * ~~重命名component为dataset~~
-* input改为使用drain
+* ~~input改为使用drain~~
