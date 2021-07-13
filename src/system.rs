@@ -241,7 +241,7 @@ where
         // 处理有新玩家进入时需要完整数据集的情况
         for (data, member, entity) in (&data, &new_scene_member, &entities).join() {
             if !data.is_direction_enabled(SyncDirection::Around) {
-                continue;
+                break;
             }
             let mut data = data.clone();
             data.mask_all();
