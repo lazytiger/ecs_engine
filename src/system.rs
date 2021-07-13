@@ -284,7 +284,7 @@ where
         }
 
         // 处理针对场景的数据集
-        for (data, id, entity) in (&mut data, &modified, &entities).join() {
+        for (data, id, entity, _) in (&mut data, &modified, &entities, !&new_scene_member).join() {
             if let Some(bytes) = data.encode(id, SyncDirection::Around) {
                 let around = gm.get_user_around(entity);
                 let tokens = NetToken::tokens(&token, &around);
