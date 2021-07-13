@@ -224,7 +224,7 @@ where
         Read<'a, BytesSender>,
         Entities<'a>,
         ReadExpect<'a, SceneManager<P, S>>,
-        WriteStorage<'a, NewSceneMember>,
+        ReadStorage<'a, NewSceneMember>,
     );
 
     fn run(
@@ -246,13 +246,14 @@ where
             let mut data = data.clone();
             data.mask_all();
             if let Some(bytes) = data.encode(entity.id(), SyncDirection::Around) {
-                let around = if let Some(around) = &member.0 {
-                    around.clone()
+                let tokens = if let Some(around) = &member.0 {
+                    NetToken::tokens(&token, around)
                 } else {
-                    gm.get_user_around(entity)
+                    let around = gm.get_user_around(entity);
+                    NetToken::tokens(&token, &around)
                 };
-                let tokens = NetToken::tokens(&token, &around);
                 sender.broadcast_bytes(tokens, bytes)
+            } else {
             }
         }
 

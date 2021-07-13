@@ -451,7 +451,7 @@ impl Generator {
         }
         let data = quote!(
             #![allow(unused_imports)]
-            #(mod #mods)*;
+            #(mod #mods;)*
 
             use specs::{
                 Component, DefaultVecStorage, FlaggedStorage, HashMapStorage, NullStorage,
@@ -897,22 +897,22 @@ impl Generator {
                 )
             };
 
-                let all_request = if keep_order {
-                    quote!(
-                        enum AllRequest {
-                            #(#names(#names),)*
-                            Closing(Closing),
-                        }
-                    )
-                } else {
-                    quote!(
-                        enum AllRequest {}
-                    )
-                };
+            let all_request = if keep_order {
+                quote!(
+                    enum AllRequest {
+                        #(#names(#names),)*
+                        Closing(Closing),
+                    }
+                )
+            } else {
+                quote!(
+                    enum AllRequest {}
+                )
+            };
 
-                let do_next = if keep_order {
-                    quote!(
-                        fn do_next(&mut self, entity:Entity) {
+            let do_next = if keep_order {
+                quote!(
+                fn do_next(&mut self, entity:Entity) {
                     let mut clean = false;
                     if let Some((next, cache)) = self.input_cache.get_mut(&entity) {
                         if cache.is_empty() {
@@ -935,14 +935,16 @@ impl Generator {
                         self.input_cache.remove(&entity);
                     }
                 }
-                    )
-                } else {
-                    quote!(
-                       fn do_next(&mut self, entity:Entity) { }
-                    )
-                };
-
+                )
+            } else {
                 quote!(
+                   fn do_next(&mut self, entity:Entity) { }
+                )
+            };
+
+            quote!(
+            #![allow(dead_code)]
+            #![allow(unused_variables)]
             #(mod #mods;)*
 
             use byteorder::{BigEndian, ByteOrder};
