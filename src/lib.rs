@@ -11,11 +11,20 @@ pub(crate) mod resource;
 pub(crate) mod sync;
 pub(crate) mod system;
 
-use crate::network::async_run;
+use crate::{
+    component::NewSceneMember,
+    network::async_run,
+    resource::TimeStatistic,
+    system::{PrintStatisticSystem, StatisticRunNow, StatisticSystem},
+};
 use byteorder::{BigEndian, ByteOrder};
 use crossbeam::channel::Receiver;
-use specs::{DispatcherBuilder, Entity, System, World, WorldExt};
-use std::{thread::sleep, time::Duration};
+use protobuf::Message;
+use specs::{Dispatcher, DispatcherBuilder, Entity, RunNow, System, SystemData, World, WorldExt};
+use std::{
+    thread::sleep,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 pub use codegen::{export, init_log, request, system};
 pub use component::{
@@ -32,18 +41,10 @@ pub use system::{
     SceneSystem, TeamSystem,
 };
 
-use crate::{
-    component::NewSceneMember,
-    resource::TimeStatistic,
-    system::{PrintStatisticSystem, StatisticSystem},
-};
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
-use protobuf::Message;
-use specs::shred::SystemData;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Trait for requests enum type, it's an aggregation of all requests
 pub trait Input {
@@ -93,7 +94,7 @@ pub enum BuildEngineError {
     DecoderNotSet,
 }
 
-pub struct EngineBuilder<'a, 'b> {
+pub struct EngineBuilder {
     address: Option<SocketAddr>,
     fps: u32,
     idle_timeout: Duration,
@@ -104,11 +105,10 @@ pub struct EngineBuilder<'a, 'b> {
     max_response_size: usize,
     bounded_size: usize,
     library_path: String,
-    profiler: bool,
-    builder: Option<DispatcherBuilder<'a, 'b>>,
+    profile: bool,
 }
 
-impl<'a, 'b> EngineBuilder<'a, 'b> {
+impl EngineBuilder {
     pub fn with_address(mut self, address: SocketAddr) -> Self {
         self.address.replace(address);
         self
@@ -160,26 +160,11 @@ impl<'a, 'b> EngineBuilder<'a, 'b> {
     }
 
     pub fn with_profiler(mut self) -> Self {
-        self.profiler = true;
+        self.profile = true;
         self
     }
 
-    pub fn add<T>(&mut self, name: &str, system: T, dep: &[&str])
-    where
-        T: for<'c> System<'c> + Send + 'a,
-        for<'c> <T as System<'c>>::SystemData: SystemData<'c>,
-    {
-        if self.profiler {
-            self.builder
-                .as_mut()
-                .unwrap()
-                .add(StatisticSystem(name.into(), system), name, dep);
-        } else {
-            self.builder.as_mut().unwrap().add(system, name, dep);
-        }
-    }
-
-    pub fn build(self) -> Result<Engine<'a, 'b>, BuildEngineError> {
+    pub fn build(self) -> Result<Engine, BuildEngineError> {
         if self.address.is_none() {
             return Err(BuildEngineError::AddressNotSet);
         }
@@ -193,14 +178,14 @@ impl<'a, 'b> EngineBuilder<'a, 'b> {
     }
 }
 
-pub struct Engine<'a, 'b> {
+pub struct Engine {
     address: SocketAddr,
     sleep: Duration,
-    builder: EngineBuilder<'a, 'b>,
+    builder: EngineBuilder,
 }
 
-impl<'a, 'b> Engine<'a, 'b> {
-    pub fn builder() -> EngineBuilder<'a, 'b> {
+impl Engine {
+    pub fn builder() -> EngineBuilder {
         EngineBuilder {
             address: None,
             fps: 30,
@@ -212,17 +197,16 @@ impl<'a, 'b> Engine<'a, 'b> {
             poll_timeout: None,
             bounded_size: 0,
             library_path: Default::default(),
-            profiler: false,
-            builder: Some(DispatcherBuilder::new()),
+            profile: false,
         }
     }
 
     pub fn run<I, S>(mut self, setup: S)
     where
         I: Input + Send + Sync + 'static,
-        S: Fn(&mut World, &mut DispatcherBuilder, &DynamicManager) -> I,
+        S: Fn(&mut World, &mut EcsDispatcherBuilder, &DynamicManager) -> I,
     {
-        let mut builder = self.builder.builder.take().unwrap();
+        let mut builder = EcsDispatcherBuilder::new(DispatcherBuilder::new(), self.builder.profile);
         let mut world = World::new();
         let dm = DynamicManager::new(self.builder.library_path.clone());
         let request = setup(&mut world, &mut builder, &dm);
@@ -240,13 +224,13 @@ impl<'a, 'b> Engine<'a, 'b> {
         world.insert(sender.clone());
         world.register::<NetToken>();
 
-        if self.builder.profiler {
+        if self.builder.profile {
             world.insert(TimeStatistic::new());
-            builder.add_thread_local(PrintStatisticSystem);
+            builder.add_thread_local("print_statistic", PrintStatisticSystem);
         }
         cfg_if::cfg_if! {
             if #[cfg(feature="debug")] {
-                builder.add_thread_local(crate::system::FsNotifySystem::new(self.builder.library_path.clone(), false));
+                builder.add_thread_local("reload", crate::system::FsNotifySystem::new(self.builder.library_path.clone(), false));
             }
         }
         builder.add(CloseSystem, "close", &[]);
@@ -285,5 +269,91 @@ pub fn unix_timestamp() -> Duration {
             Duration::from_secs(0)
         }
         Ok(d) => d,
+    }
+}
+
+pub struct EcsDispatcherBuilder<'a, 'b> {
+    builder: DispatcherBuilder<'a, 'b>,
+    profile: bool,
+}
+
+impl<'a, 'b> EcsDispatcherBuilder<'a, 'b> {
+    pub fn new(builder: DispatcherBuilder<'a, 'b>, statistic: bool) -> Self {
+        Self {
+            builder,
+            profile: statistic,
+        }
+    }
+
+    pub fn with<T>(mut self, system: T, name: &str, dep: &[&str]) -> Self
+    where
+        T: for<'c> System<'c> + Send + 'a,
+        for<'c> <T as System<'c>>::SystemData: SystemData<'c>,
+    {
+        let EcsDispatcherBuilder {
+            profile: statistic,
+            mut builder,
+        } = self;
+        let builder = if statistic {
+            builder.with(StatisticSystem(name.into(), system), name, dep)
+        } else {
+            builder.with(system, name, dep)
+        };
+        Self {
+            builder,
+            profile: statistic,
+        }
+    }
+
+    pub fn add<T>(&mut self, system: T, name: &str, dep: &[&str])
+    where
+        T: for<'c> System<'c> + Send + 'a,
+        for<'c> <T as System<'c>>::SystemData: SystemData<'c>,
+    {
+        if self.profile {
+            self.builder
+                .add(StatisticSystem(name.into(), system), name, dep);
+        } else {
+            self.builder.add(system, name, dep);
+        }
+    }
+
+    pub fn with_thread_local<T>(mut self, name: &str, system: T) -> Self
+    where
+        T: for<'c> RunNow<'c> + 'b,
+    {
+        let EcsDispatcherBuilder {
+            profile: statistic,
+            mut builder,
+        } = self;
+        let builder = if statistic {
+            builder.with_thread_local(StatisticRunNow(name.into(), system))
+        } else {
+            builder.with_thread_local(system)
+        };
+        Self {
+            builder,
+            profile: statistic,
+        }
+    }
+
+    pub fn add_thread_local<T>(&mut self, name: &str, system: T)
+    where
+        T: for<'c> RunNow<'c> + 'b,
+    {
+        if self.profile {
+            self.builder
+                .add_thread_local(StatisticRunNow(name.into(), system));
+        } else {
+            self.builder.add_thread_local(system);
+        }
+    }
+
+    pub fn build(self) -> Dispatcher<'a, 'b> {
+        self.builder.build()
+    }
+
+    pub fn into(self) -> DispatcherBuilder<'a, 'b> {
+        self.builder
     }
 }

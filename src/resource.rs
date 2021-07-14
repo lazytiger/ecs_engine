@@ -298,7 +298,9 @@ where
 
     pub fn get_user_around(&self, entity: Entity) -> BitSet {
         if let Some((parent, index)) = self.user_grids.get(&entity) {
-            self.get_scene_around(parent, *index)
+            let mut bitset = self.get_scene_around(parent, *index);
+            bitset.remove(entity.id());
+            bitset
         } else {
             BitSet::new()
         }

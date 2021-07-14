@@ -315,6 +315,7 @@ impl Config {
                 self.signature.ident.to_string().to_case(Case::UpperCamel)
             )
         };
+        add_system(system_name.to_string());
         let system_fn = format_ident!("{}Fn", system_name);
 
         let lib_name = if let Some(lib_name) = &self.lib_name {
@@ -954,6 +955,11 @@ pub fn init_log(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 lazy_static::lazy_static! {
     static ref NAMES: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
+    static ref SYSTEMS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+}
+
+fn add_system(name: String) {
+    SYSTEMS.lock().unwrap().push(name);
 }
 
 fn is_input_type(ty: &Type) -> bool {
@@ -991,4 +997,24 @@ pub fn request(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
     item
+}
+
+#[proc_macro_attribute]
+pub fn setup(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let _item = parse_macro_input!(item as ItemFn);
+    let systems: Vec<_> = SYSTEMS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|name| format_ident!("{}", name))
+        .collect();
+
+    quote!(
+        pub fn setup(world:&World, builder:&DispatcherBuilder, dm:&DynamicManager)  {
+            #(
+                #systems::default().setup(world, builder, dm);
+            )*
+        }
+    )
+    .into()
 }

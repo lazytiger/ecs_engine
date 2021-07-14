@@ -379,6 +379,25 @@ where
     }
 }
 
+pub struct StatisticRunNow<T>(pub String, pub T);
+
+impl<'a, T> RunNow<'a> for StatisticRunNow<T>
+where
+    T: RunNow<'a>,
+{
+    fn run_now(&mut self, world: &'a World) {
+        let ts = world.read_resource::<TimeStatistic>();
+        let begin = UNIX_EPOCH.elapsed().unwrap();
+        self.1.run_now(world);
+        let end = UNIX_EPOCH.elapsed().unwrap();
+        ts.add_time(self.0.clone(), begin, end);
+    }
+
+    fn setup(&mut self, world: &mut World) {
+        self.1.setup(world);
+    }
+}
+
 pub struct PrintStatisticSystem;
 
 impl<'a> System<'a> for PrintStatisticSystem {
