@@ -1,8 +1,10 @@
 use proc_macro::TokenStream;
 
 use convert_case::{Case, Casing};
+use generator::Generator;
 use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
+use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 use syn::{
     parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, GenericArgument, ItemFn,
     Lit, LitBool, LitStr, Meta, Pat, PathArguments, ReturnType, Signature, Type, TypePath,
@@ -296,9 +298,6 @@ impl Config {
             .outputs
             .iter()
             .for_each(|ty| components.push(ty.clone()));
-        if let Some(t) = &self.signature.input {
-            components.push(t.clone());
-        }
         if contains_duplicate(&components) {
             return Err(Error::DuplicateComponentType);
         }
@@ -336,6 +335,34 @@ impl Config {
             ))
         };
 
+        let mut system_sname =
+            self.signature
+                .parameters
+                .iter()
+                .fold(Ok(String::new()), |name, param| {
+                    if let Parameter::Component(_, index, _) = param {
+                        let type_name = type_to_string(&self.signature.component_args[*index]);
+                        if is_input_string(&type_name) {
+                            let name = name?;
+                            return if name.is_empty() {
+                                Ok(type_name)
+                            } else {
+                                Err(Error::MultipleInputFound)
+                            };
+                        }
+                    }
+                    name
+                })?;
+        let mut system_deps = quote!(&[]);
+        if system_sname.is_empty() {
+            system_sname = quote!(#system_name).to_string();
+        } else {
+            let name = system_sname.to_case(Case::Snake);
+            let dep = format!("{}_input", name);
+            system_sname = format!("{}_exec", name);
+            system_deps = quote!(&[#dep]);
+        }
+
         // all components should be registered
         let mut component_types = Vec::new();
         // field names
@@ -363,7 +390,6 @@ impl Config {
         // names for foreach
         let mut foreach_names = Vec::new();
         // names for storing input entities.
-        let mut input_enames = Vec::new();
         let mut write_components = Vec::new();
 
         for param in &self.signature.parameters {
@@ -427,19 +453,6 @@ impl Config {
                         fn_input_types.push(quote!(&#ty));
                     }
                 }
-                Parameter::Input(vname) => {
-                    if let Some(ty) = &self.signature.input {
-                        component_types.push(ty.clone());
-                        fn_input_types.push(quote!(&#ty));
-                        let jname = format_ident!("j{}", vname);
-                        join_names.push(quote!(&#jname));
-                        func_names.push(quote!(#vname));
-                        foreach_names.push(vname.clone());
-                        input_names.push(quote!(mut #jname));
-                        system_data_types.push(quote!(::specs::WriteStorage<'a, #ty>));
-                        input_enames.push(format_ident!("es"));
-                    }
-                }
                 Parameter::Entity(vname) => {
                     let jname = format_ident!("j{}", vname);
                     join_names.push(quote!(&#jname));
@@ -466,9 +479,7 @@ impl Config {
             write_components.push(typ.clone());
         }
 
-        if (!self.signature.outputs.is_empty() || self.signature.input.is_some())
-            && !self.signature.has_entity()
-        {
+        if !self.signature.outputs.is_empty() && !self.signature.has_entity() {
             system_data_types.push(quote!(::specs::Entities<'a>));
             let vname = format_ident!("entity");
             let jname = format_ident!("j{}", vname);
@@ -518,7 +529,7 @@ impl Config {
                     pub fn setup(mut self, world: &mut ::specs::World, builder: &mut ::specs::DispatcherBuilder, dm: &::ecs_engine::DynamicManager) {
                         #(world.register::<#component_types>();)*
                         #dynamic_init
-                        builder.add(self, #func_name, &[]);
+                        builder.add(self, #system_sname, #system_deps);
                     }
                 }
         };
@@ -593,7 +604,6 @@ impl Config {
 enum ArgAttr {
     Resource(bool),
     State,
-    Input,
     Component,
 }
 
@@ -601,7 +611,6 @@ enum Parameter {
     Component(Ident, usize, bool),
     Resource(Ident, usize, bool, bool),
     State(Ident, usize, bool),
-    Input(Ident),
     Entity(Ident),
 }
 
@@ -611,7 +620,6 @@ struct Sig {
     state_args: Vec<Type>,
     resource_args: Vec<Type>,
     component_args: Vec<Type>,
-    input: Option<Type>,
     outputs: Vec<Type>,
     output_names: Vec<Ident>,
 }
@@ -629,7 +637,6 @@ impl Sig {
         let mut resource_args = Vec::new();
         let mut state_args = Vec::new();
         let mut component_args = Vec::new();
-        let mut input = None;
         let mut index = 0usize;
         for param in &mut item.inputs {
             index += 1;
@@ -659,12 +666,6 @@ impl Sig {
                                         mutable,
                                     ));
                                     state_args.push(elem.clone())
-                                }
-                                Some(ArgAttr::Input) => {
-                                    parameters.push(Parameter::Input(name));
-                                    if input.replace(elem.clone()).is_some() {
-                                        return Err(Error::MultipleInputFound);
-                                    }
                                 }
                                 _ => {
                                     if is_entity(elem) {
@@ -725,7 +726,6 @@ impl Sig {
             resource_args,
             state_args,
             component_args,
-            input,
             outputs,
             output_names: Vec::default(),
         })
@@ -785,18 +785,6 @@ impl Sig {
                         return Err(Error::ConflictParameterAttribute);
                     }
                 }
-                Some(ident) if ident == "input" => {
-                    attributes.remove(i);
-                    if attr.replace(ArgAttr::Input).is_some() {
-                        return Err(Error::ConflictParameterAttribute);
-                    }
-                }
-                Some(ident) if ident == "component" => {
-                    attributes.remove(i);
-                    if attr.replace(ArgAttr::Component).is_some() {
-                        return Err(Error::ConflictParameterAttribute);
-                    }
-                }
                 _ => {}
             }
         }
@@ -826,6 +814,10 @@ fn is_type(ty: &Type, segments: &[&str]) -> bool {
     } else {
         false
     }
+}
+
+fn type_to_string(ty: &Type) -> String {
+    quote!(#ty).to_string().split("::").last().unwrap().into()
 }
 
 fn path_match(path: &TypePath, segments: &[&str]) -> bool {
@@ -948,9 +940,9 @@ fn is_primitive(ty: &Type) -> bool {
 
 #[proc_macro_attribute]
 pub fn init_log(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(item as ItemFn);
+    let item = parse_macro_input!(item as ItemFn);
     quote!(
-        #input
+        #item
 
         #[no_mangle]
         extern "C" fn init_logger(param: ::ecs_engine::LogParam) {
@@ -958,4 +950,45 @@ pub fn init_log(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     )
     .into()
+}
+
+lazy_static::lazy_static! {
+    static ref NAMES: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
+}
+
+fn is_input_type(ty: &Type) -> bool {
+    let type_name = type_to_string(ty);
+    is_input_string(&type_name)
+}
+
+fn is_input_string(type_name: &String) -> bool {
+    NAMES.lock().unwrap().contains_key(type_name)
+}
+
+#[proc_macro_attribute]
+pub fn request(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let meta = parse_macro_input!(attr as Meta);
+    if let Meta::Path(path) = meta {
+        let mut config_path = PathBuf::new();
+        path.segments
+            .iter()
+            .for_each(|seg| config_path.push(seg.ident.to_string()));
+        match Generator::parse_config(config_path) {
+            Err(err) => {
+                let message = format!("parse request dir failed:{:?}", err);
+                return quote!(compile_error!(#message);).into();
+            }
+            Ok(configs) => {
+                let mut names = NAMES.lock().unwrap();
+                configs.iter().for_each(|(_, file)| {
+                    file.configs.iter().for_each(|config| {
+                        if config.hide.is_none() {
+                            names.insert(config.name.clone(), false);
+                        }
+                    })
+                })
+            }
+        }
+    }
+    item
 }

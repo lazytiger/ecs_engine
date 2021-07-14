@@ -50,7 +50,7 @@ impl ChangeSet for UserInfo {
 #[system]
 #[dynamic(user)]
 fn user_derive(
-    #[input] input: &UserInput,
+    input: &UserInput,
     bag: &mut BagInfo,
     #[state] other: &mut usize,
     #[resource] re: &mut String,

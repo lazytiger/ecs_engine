@@ -7,29 +7,25 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-convert_case = "0.4"
+
 specs = { version = "0.16", features = ["specs-derive"] }
 lazy_static = "1.4.0"
 libloading = "0.7.0"
 codegen = { path = "codegen" }
+generator = { path = "generator" }
 log = "0.4"
 fern = "0.6"
 chrono = "0.4"
 mio = { version = "0.7", features = ["net", "os-poll"] }
 slab = "0.4"
 rayon = "1.5"
-protobuf = {path = "../protobuf/protobuf"}
-serde = "1.0"
-serde_derive = "1.0"
-derive_more = "0.99"
-syn = "1.0"
-quote = "1.0"
-protobuf-codegen-pure = { path = "../protobuf/protobuf-codegen-pure" }
-md5 = "0.7"
+protobuf = { path = "../protobuf/protobuf" }
+
+
+
 crossbeam = "0.8"
 byteorder = "1.4"
-proc-macro2 = "1.0"
-ron = "0.6"
+
 cfg-if = "1.0"
 notify = "4.0"
 specs-hierarchy = "0.6"
@@ -38,4 +34,4 @@ specs-hierarchy = "0.6"
 debug = []
 
 [workspace]
-members = ["codegen"]
+members = ["codegen", "generator"]

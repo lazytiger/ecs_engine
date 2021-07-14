@@ -4,7 +4,6 @@
 use std::{net::SocketAddr, ops::Deref};
 
 pub(crate) mod component;
-pub(crate) mod config;
 pub(crate) mod dlog;
 pub(crate) mod dynamic;
 pub(crate) mod network;
@@ -18,13 +17,13 @@ use crossbeam::channel::Receiver;
 use specs::{DispatcherBuilder, Entity, System, World, WorldExt};
 use std::{thread::sleep, time::Duration};
 
-pub use codegen::{export, init_log, system};
+pub use codegen::{export, init_log, request, system};
 pub use component::{
     Closing, HashComponent, NetToken, Position, SceneData, SceneMember, SelfSender, TeamMember,
 };
-pub use config::{Generator, SyncDirection};
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
+pub use generator::{Generator, SyncDirection};
 pub use network::{channel, BytesSender, RequestIdent};
 pub use resource::SceneManager;
 pub use sync::{ChangeSet, DataSet};

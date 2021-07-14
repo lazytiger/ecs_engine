@@ -1,6 +1,5 @@
 use crate::{
     component::{Closing, NewSceneMember, Position, SceneData, SceneMember, TeamMember},
-    config::StorageType::DefaultVec,
     dynamic::{get_library_name, Library},
     network::BytesSender,
     resource::{SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
