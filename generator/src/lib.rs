@@ -462,14 +462,14 @@ impl Generator {
 
             use specs::{
                 Component, DefaultVecStorage, FlaggedStorage, HashMapStorage, NullStorage,
-                VecStorage, DispatcherBuilder, Tracked,
+                VecStorage,  Tracked,
             };
             use std::{
                 any::Any,
                 ops::{Deref, DerefMut},
             };
             use protobuf::{Message, MaskSet, Mask};
-            use ecs_engine::{ChangeSet, SyncDirection, DataSet, CommitChangeSystem};
+            use ecs_engine::{ChangeSet, SyncDirection, DataSet, CommitChangeSystem, GameDispatcherBuilder,};
             use byteorder::{BigEndian, ByteOrder};
             #(pub use #inners;)*
 
@@ -639,7 +639,7 @@ impl Generator {
 
             #(#cs_codes)*
 
-            pub fn setup<P, S>(builder:&mut DispatcherBuilder)
+            pub fn setup<P, S>(builder:&mut GameDispatcherBuilder)
             where
                 P: Component + ecs_engine::Position + Send + Sync + 'static,
                 P::Storage: Tracked,
@@ -793,7 +793,7 @@ impl Generator {
 
                 let cleanup = if keep_order {
                     quote!(
-                        pub fn cleanup(&self, builder:&mut DispatcherBuilder) {
+                        pub fn cleanup(&self, builder:&mut GameDispatcherBuilder) {
                         #(
                             builder.add(CleanStorageSystem::<#names>::new(self.next_sender.clone()), #cnames, &[#enames]);
                         )*
@@ -801,7 +801,7 @@ impl Generator {
                     )
                 } else {
                     quote!(
-                        pub fn cleanup(&self, builder:&mut DispatcherBuilder) {
+                        pub fn cleanup(&self, builder:&mut GameDispatcherBuilder) {
                         #(
                             builder.add(CleanStorageSystem::<#names>::default(), #cnames, &[#enames]);
                         )*
@@ -967,11 +967,11 @@ impl Generator {
                     use crossbeam::channel::{Receiver, Sender};
                     use ecs_engine::{
                         channel, CleanStorageSystem,  Closing, HandshakeSystem, HashComponent, Input,
-                        InputSystem, RequestIdent, CommandId
+                        InputSystem, RequestIdent, CommandId, GameDispatcherBuilder,
                     };
                     use mio::Token;
                     use protobuf::Message;
-                    use specs::{DispatcherBuilder, Entity, };
+                    use specs::Entity;
                     use std::collections::{HashMap, VecDeque};
 
                     #(pub type #names = HashComponent<#files::#names>;)*
@@ -990,7 +990,7 @@ impl Generator {
                     }
 
                     impl Request {
-                        pub fn new(bounded_size: usize, builder: &mut DispatcherBuilder) -> Self {
+                        pub fn new(bounded_size: usize, builder: &mut GameDispatcherBuilder) -> Self {
                             let (next_sender, next_receiver) = channel(0);
                             let input_cache = HashMap::new();
                             let (token, receiver) = channel(bounded_size);

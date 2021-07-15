@@ -527,7 +527,7 @@ impl Config {
             }
 
             impl #system_name {
-                    pub fn setup(mut self, world: &mut ::specs::World, builder: &mut ::specs::DispatcherBuilder, dm: &::ecs_engine::DynamicManager) {
+                    pub fn setup(mut self, world: &mut ::specs::World, builder: &mut ::ecs_engine::GameDispatcherBuilder, dm: &::ecs_engine::DynamicManager) {
                         #(world.register::<#component_types>();)*
                         #dynamic_init
                         builder.add(self, #system_sname, #system_deps);
@@ -1001,7 +1001,45 @@ pub fn request(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn setup(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let _item = parse_macro_input!(item as ItemFn);
+    let err_code = quote!(
+        compile_error!("invalid setup function, signature should like this `pub fn setup(world:&mut World, builder:&mut GameDispatcherBuilder, dm:&DynamicManager) `");
+    );
+    let item = parse_macro_input!(item as ItemFn);
+    if let Visibility::Inherited = item.vis {
+        return err_code.into();
+    }
+    if item.sig.inputs.len() != 3 {
+        return err_code.into();
+    }
+
+    for (index, input) in item.sig.inputs.iter().enumerate() {
+        match input {
+            FnArg::Receiver(_) => {
+                return err_code.into();
+            }
+            FnArg::Typed(typed) => {
+                if let Type::Reference(ty) = typed.ty.as_ref() {
+                    if !match index {
+                        0 => ty.mutability.is_some() && is_type(ty.elem.as_ref(), &["World"]),
+                        1 => {
+                            ty.mutability.is_some()
+                                && is_type(ty.elem.as_ref(), &["GameDispatcherBuilder"])
+                        }
+                        2 => {
+                            ty.mutability.is_none()
+                                && is_type(ty.elem.as_ref(), &["DynamicManager"])
+                        }
+                        _ => unreachable!(),
+                    } {
+                        return err_code.into();
+                    }
+                } else {
+                    return err_code.into();
+                }
+            }
+        }
+    }
+
     let systems: Vec<_> = SYSTEMS
         .lock()
         .unwrap()
@@ -1010,7 +1048,7 @@ pub fn setup(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .collect();
 
     quote!(
-        pub fn setup(world:&World, builder:&DispatcherBuilder, dm:&DynamicManager)  {
+        pub fn setup(world:&mut World, builder:&mut GameDispatcherBuilder, dm:&DynamicManager)  {
             #(
                 #systems::default().setup(world, builder, dm);
             )*

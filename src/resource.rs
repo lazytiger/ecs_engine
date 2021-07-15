@@ -7,6 +7,7 @@ use specs_hierarchy::{Hierarchy, HierarchyEvent, Parent};
 use std::{
     collections::HashMap,
     marker::PhantomData,
+    ops::Deref,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -26,11 +27,13 @@ impl TimeStatistic {
         self.times.lock().unwrap().insert(name, (begin, end));
     }
 
-    pub fn print(&self) {
+    pub fn print(&self, frame: usize, fps: usize) {
         let times = self.times.lock().unwrap();
         for (name, (begin, end)) in times.iter() {
-            println!(
-                "system {} begin at {:?}, cost:{}",
+            log::info!(
+                "frame:{}, fps:{}, system {} begin at {:?}, cost:{}",
+                frame,
+                fps,
                 name,
                 begin,
                 end.as_micros() - begin.as_micros()
@@ -40,6 +43,43 @@ impl TimeStatistic {
 
     pub fn clear(&self) {
         self.times.lock().unwrap().clear();
+    }
+}
+
+pub struct FrameCounter {
+    time: Instant,
+    delta: Duration,
+    frame: usize,
+}
+
+impl Default for FrameCounter {
+    fn default() -> Self {
+        Self {
+            time: Instant::now(),
+            delta: Duration::from_millis(1),
+            frame: 0,
+        }
+    }
+}
+
+impl FrameCounter {
+    pub fn next_frame(&mut self) {
+        self.delta = self.time.elapsed();
+        self.time = Instant::now();
+        self.frame += 1;
+    }
+
+    pub fn frame(&self) -> usize {
+        self.frame
+    }
+
+    pub fn fps(&self) -> usize {
+        let delta = self.delta.as_millis() as usize;
+        if delta == 0 {
+            1000
+        } else {
+            1000 / delta
+        }
     }
 }
 

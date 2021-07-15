@@ -2,7 +2,7 @@ use crate::{
     component::{Closing, NewSceneMember, Position, SceneData, SceneMember, TeamMember},
     dynamic::{get_library_name, Library},
     network::BytesSender,
-    resource::{SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
+    resource::{FrameCounter, SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
     sync::ChangeSet,
     DataSet, DynamicManager, NetToken, SelfSender, SyncDirection,
 };
@@ -11,8 +11,9 @@ use mio::Token;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use protobuf::Mask;
 use specs::{
-    shred::SystemData, BitSet, Component, Entities, Entity, Join, LazyUpdate, Read, ReadExpect,
-    ReadStorage, RunNow, System, Tracked, World, WorldExt, WriteExpect, WriteStorage,
+    shred::{DynamicSystemData, SystemData},
+    BitSet, Component, Entities, Entity, Join, LazyUpdate, Read, ReadExpect, ReadStorage, RunNow,
+    System, Tracked, World, WorldExt, WriteExpect, WriteStorage,
 };
 use specs_hierarchy::{HierarchySystem, Parent};
 use std::{
@@ -362,18 +363,38 @@ where
     }
 }
 
+pub trait GameSystem<'a> {
+    type SystemData: SystemData<'a>;
+
+    fn run(&mut self, data: Self::SystemData);
+}
+
+impl<'a, T: ?Sized> GameSystem<'a> for T
+where
+    T: System<'a>,
+    <T as System<'a>>::SystemData: SystemData<'a>,
+{
+    type SystemData = <T as System<'a>>::SystemData;
+
+    fn run(&mut self, data: Self::SystemData) {
+        System::run(self, data);
+    }
+}
+
 pub struct StatisticSystem<T>(pub String, pub T);
 
 impl<'a, T> System<'a> for StatisticSystem<T>
 where
-    T: System<'a>,
-    T::SystemData: SystemData<'a>,
+    T: System<'a> + GameSystem<'a>,
 {
-    type SystemData = (ReadExpect<'a, TimeStatistic>, T::SystemData);
+    type SystemData = (
+        ReadExpect<'a, TimeStatistic>,
+        <T as GameSystem<'a>>::SystemData,
+    );
 
     fn run(&mut self, (ts, data): Self::SystemData) {
         let begin = UNIX_EPOCH.elapsed().unwrap();
-        self.1.run(data);
+        GameSystem::run(&mut self.1, data);
         let end = UNIX_EPOCH.elapsed().unwrap();
         ts.add_time(self.0.clone(), begin, end);
     }
@@ -401,10 +422,10 @@ where
 pub struct PrintStatisticSystem;
 
 impl<'a> System<'a> for PrintStatisticSystem {
-    type SystemData = ReadExpect<'a, TimeStatistic>;
+    type SystemData = (Read<'a, FrameCounter>, ReadExpect<'a, TimeStatistic>);
 
-    fn run(&mut self, data: Self::SystemData) {
-        data.print();
+    fn run(&mut self, (frame, data): Self::SystemData) {
+        data.print(frame.frame(), frame.fps());
         data.clear();
     }
 }

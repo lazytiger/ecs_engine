@@ -1,7 +1,7 @@
 #![feature(macro_attributes_in_derive_output)]
 #![deny(unsafe_code)]
 #![allow(dead_code)]
-use ecs_engine::{export, system, ChangeSet, DynamicManager};
+use ecs_engine::{export, system, ChangeSet, DynamicManager, GameDispatcherBuilder};
 use specs::{
     world::Index, BitSet, Component, DenseVecStorage, DispatcherBuilder, HashMapStorage, Join,
     LazyUpdate, VecStorage, World, WorldExt,
@@ -95,7 +95,7 @@ fn setup_logger() -> Result<(), fern::InitError> {
 fn main() {
     setup_logger().unwrap();
     let mut world = World::new();
-    let mut builder = DispatcherBuilder::new();
+    let mut builder = GameDispatcherBuilder::new(DispatcherBuilder::new(), true);
     let dm = DynamicManager::default();
     UserDeriveSystem::default().setup(&mut world, &mut builder, &dm);
     GuildDeriveSystem::default().setup(&mut world, &mut builder, &dm);

@@ -15,7 +15,7 @@ use crate::{
     component::NewSceneMember,
     network::async_run,
     resource::TimeStatistic,
-    system::{PrintStatisticSystem, StatisticRunNow, StatisticSystem},
+    system::{GameSystem, PrintStatisticSystem, StatisticRunNow, StatisticSystem},
 };
 use byteorder::{BigEndian, ByteOrder};
 use crossbeam::channel::Receiver;
@@ -26,7 +26,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-pub use codegen::{export, init_log, request, system};
+pub use codegen::{export, init_log, request, setup, system};
 pub use component::{
     Closing, HashComponent, NetToken, Position, SceneData, SceneMember, SelfSender, TeamMember,
 };
@@ -41,10 +41,13 @@ pub use system::{
     SceneSystem, TeamSystem,
 };
 
+use crate::resource::FrameCounter;
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
 pub use libloading::os::windows::Symbol;
+use specs::shred::DynamicSystemData;
+use std::marker::PhantomData;
 
 /// Trait for requests enum type, it's an aggregation of all requests
 pub trait Input {
@@ -159,7 +162,7 @@ impl EngineBuilder {
         self
     }
 
-    pub fn with_profiler(mut self) -> Self {
+    pub fn with_profile(mut self) -> Self {
         self.profile = true;
         self
     }
@@ -204,9 +207,10 @@ impl Engine {
     pub fn run<I, S>(mut self, setup: S)
     where
         I: Input + Send + Sync + 'static,
-        S: Fn(&mut World, &mut EcsDispatcherBuilder, &DynamicManager) -> I,
+        S: Fn(&mut World, &mut GameDispatcherBuilder, &DynamicManager) -> I,
     {
-        let mut builder = EcsDispatcherBuilder::new(DispatcherBuilder::new(), self.builder.profile);
+        let mut builder =
+            GameDispatcherBuilder::new(DispatcherBuilder::new(), self.builder.profile);
         let mut world = World::new();
         let dm = DynamicManager::new(self.builder.library_path.clone());
         let request = setup(&mut world, &mut builder, &dm);
@@ -222,6 +226,7 @@ impl Engine {
             request,
         );
         world.insert(sender.clone());
+        world.insert(FrameCounter::default());
         world.register::<NetToken>();
 
         if self.builder.profile {
@@ -249,6 +254,7 @@ impl Engine {
 
         loop {
             // input
+            world.write_resource::<FrameCounter>().next_frame();
             let start_time = Instant::now();
             dispatcher.dispatch(&world);
             world.maintain();
@@ -272,12 +278,12 @@ pub fn unix_timestamp() -> Duration {
     }
 }
 
-pub struct EcsDispatcherBuilder<'a, 'b> {
+pub struct GameDispatcherBuilder<'a, 'b> {
     builder: DispatcherBuilder<'a, 'b>,
     profile: bool,
 }
 
-impl<'a, 'b> EcsDispatcherBuilder<'a, 'b> {
+impl<'a, 'b> GameDispatcherBuilder<'a, 'b> {
     pub fn new(builder: DispatcherBuilder<'a, 'b>, statistic: bool) -> Self {
         Self {
             builder,
@@ -287,12 +293,11 @@ impl<'a, 'b> EcsDispatcherBuilder<'a, 'b> {
 
     pub fn with<T>(mut self, system: T, name: &str, dep: &[&str]) -> Self
     where
-        T: for<'c> System<'c> + Send + 'a,
-        for<'c> <T as System<'c>>::SystemData: SystemData<'c>,
+        for<'c> T: GameSystem<'c> + System<'c> + Send + 'a,
     {
-        let EcsDispatcherBuilder {
+        let GameDispatcherBuilder {
             profile: statistic,
-            mut builder,
+            builder,
         } = self;
         let builder = if statistic {
             builder.with(StatisticSystem(name.into(), system), name, dep)
@@ -307,8 +312,7 @@ impl<'a, 'b> EcsDispatcherBuilder<'a, 'b> {
 
     pub fn add<T>(&mut self, system: T, name: &str, dep: &[&str])
     where
-        T: for<'c> System<'c> + Send + 'a,
-        for<'c> <T as System<'c>>::SystemData: SystemData<'c>,
+        for<'c> T: System<'c> + GameSystem<'c> + Send + 'a,
     {
         if self.profile {
             self.builder
@@ -322,9 +326,9 @@ impl<'a, 'b> EcsDispatcherBuilder<'a, 'b> {
     where
         T: for<'c> RunNow<'c> + 'b,
     {
-        let EcsDispatcherBuilder {
+        let GameDispatcherBuilder {
             profile: statistic,
-            mut builder,
+            builder,
         } = self;
         let builder = if statistic {
             builder.with_thread_local(StatisticRunNow(name.into(), system))
