@@ -92,10 +92,10 @@ pub struct SceneManager<P, S> {
     hierarchy_reader: ReaderId<HierarchyEvent>,
     _phantom: PhantomData<P>,
     /// mapping from entity to grid index
-    user_grids: HashMap<Entity, (Entity, usize)>,
+    user_grids: HashMap<u32, (Entity, usize)>,
     /// mapping from scene to grids
-    scene_grids: HashMap<Entity, HashMap<usize, (usize, BitSet)>>,
-    scene_data: HashMap<Entity, S>,
+    scene_grids: HashMap<u32, HashMap<usize, (usize, BitSet)>>,
+    scene_data: HashMap<u32, S>,
     scene_mapping: HashMap<u32, Entity>,
 }
 
@@ -144,15 +144,13 @@ where
                 }
                 ComponentEvent::Modified(_) => {}
                 ComponentEvent::Removed(id) => {
-                    removed.add(*id);
+                    self.scene_data.remove(id);
+                    self.scene_mapping.remove(id);
                 }
             }
         }
-        for (entity, _) in (&entities, &removed).join() {
-            self.scene_data.remove(&entity);
-        }
-        for (entity, data, _) in (&entities, &scene_data, &inserted).join() {
-            self.scene_data.insert(entity, data.clone());
+        for (data, id) in (&scene_data, &inserted).join() {
+            self.scene_data.insert(id, data.clone());
         }
         inserted.clear();
         removed.clear();
@@ -160,15 +158,13 @@ where
         let events = scene_hierarchy.changed().read(&mut self.hierarchy_reader);
         for event in events {
             match event {
-                HierarchyEvent::Modified(entity) | HierarchyEvent::Removed(entity) => {
-                    modified.add(entity.id());
+                HierarchyEvent::Removed(entity) => {
+                    removed.add(entity.id());
+                    self.remove_grid_entity(entity.id());
                 }
+                _ => {}
             }
         }
-        for (_, entity) in (&modified, &entities).join() {
-            self.remove_grid_entity(entity);
-        }
-        modified.clear();
 
         let events = positions.channel().read(&mut self.position_reader);
         for event in events {
@@ -180,46 +176,46 @@ where
                     inserted.add(*id);
                 }
                 ComponentEvent::Removed(id) => {
-                    removed.add(*id);
+                    self.remove_grid_entity(*id);
                 }
             }
         }
 
-        for (entity, pos, scene, _) in (&entities, &positions, &scene, &inserted).join() {
+        for (entity, pos, scene, id) in (&entities, &positions, &scene, &inserted).join() {
             let parent = scene.parent_entity();
             if let Some(sd) = scene_data.get(parent) {
                 if let Some(index) = sd.grid_index(pos.x(), pos.y()) {
                     self.insert_grid_entity(parent, entity, index);
+                    log::info!(
+                        "entity:{} insert into scene:{} grid {}",
+                        entity.id(),
+                        parent.id(),
+                        index
+                    );
                     let afdc = new_scene_member.get_mut_or_default(entity).unwrap();
-                    afdc.add_mask(&self.get_user_around(entity));
+                    let around = self.get_user_around(entity);
+                    afdc.add_mask(&around);
+                    let id = entity.id();
+                    for (entity, _) in (&entities, &around).join() {
+                        new_scene_member.get_mut_or_default(entity).unwrap().add(id);
+                    }
+                } else {
+                    log::error!(
+                        "invalid position:[{},{}] for scene:{}",
+                        pos.x(),
+                        pos.y(),
+                        parent.id()
+                    );
                 }
             } else {
-                log::error!("scene not found");
+                log::error!("scene:{} not found", parent.id());
             }
         }
 
-        for (entity, _) in (&entities, &removed).join() {
+        for (entity, pos, id) in (&entities, &positions, &modified).join() {
             if let Some((parent, index)) = self
                 .user_grids
-                .get(&entity)
-                .map(|(parent, index)| (*parent, *index))
-            {
-                if let Some(grids) = self.scene_grids.get_mut(&parent) {
-                    if let Some((count, grid)) = grids.get_mut(&index) {
-                        if !grid.remove(entity.id()) {
-                            log::error!("entity:{} not found in set", entity.id());
-                        } else {
-                            *count -= 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        for (entity, pos, _) in (&entities, &positions, &modified).join() {
-            if let Some((parent, index)) = self
-                .user_grids
-                .get(&entity)
+                .get(&id)
                 .map(|(parent, index)| (*parent, *index))
             {
                 if let Some(sd) = scene_data.get(parent) {
@@ -227,8 +223,14 @@ where
                         if index == new_index {
                             continue;
                         }
+                        log::info!(
+                            "entity:{} enter scene:{} grid:{}",
+                            entity.id(),
+                            parent.id(),
+                            new_index
+                        );
                         let (_, _, inserted) = sd.diff(index, new_index);
-                        if let Some(grids) = self.scene_grids.get_mut(&parent) {
+                        if let Some(grids) = self.scene_grids.get_mut(&parent.id()) {
                             let mut set = BitSet::new();
                             for insert in inserted {
                                 if let Some((_, grid)) = grids.get(&insert) {
@@ -252,16 +254,22 @@ where
                                 }
                             }
                         } else {
-                            log::error!("position modified, but grids not found in manager");
+                            log::error!("scene:{} not found in grid manager", parent.id());
                         }
                         self.insert_grid_entity(parent, entity, new_index);
+                    } else {
+                        log::error!(
+                            "invalid position:[{}, {}] for scene:{}",
+                            pos.x(),
+                            pos.y(),
+                            parent.id()
+                        );
                     }
                 } else {
-                    log::error!("position modified, but scene data not found in manager");
+                    log::error!("scene data {} not found in manager", parent.id());
                 }
             } else {
-                log::error!("position modified, but grid index not found in manager");
-                continue;
+                log::error!("entity:{} not found in user grid", entity.id());
             }
         }
 
@@ -284,10 +292,10 @@ where
     }
 
     fn insert_grid_entity(&mut self, parent: Entity, entity: Entity, index: usize) {
-        if !self.scene_grids.contains_key(&parent) {
-            self.scene_grids.insert(parent, Default::default());
+        if !self.scene_grids.contains_key(&parent.id()) {
+            self.scene_grids.insert(parent.id(), Default::default());
         }
-        let grids = self.scene_grids.get_mut(&parent).unwrap();
+        let grids = self.scene_grids.get_mut(&parent.id()).unwrap();
         if !grids.contains_key(&index) {
             grids.insert(index, Default::default());
         }
@@ -297,28 +305,20 @@ where
         } else {
             *count += 1;
         }
-        self.user_grids.insert(entity, (parent, index));
-    }
-
-    pub fn insert_scene(&mut self, id: u32, entity: Entity) {
-        if self.scene_mapping.insert(id, entity).is_some() {
-            log::error!("scene:{} already inserted", id);
-        }
-    }
-
-    pub fn get_scene_entity(&self, id: u32) -> Option<Entity> {
-        self.scene_mapping.get(&id).map(|entity| *entity)
+        self.user_grids.insert(entity.id(), (parent, index));
     }
 
     pub fn get_scene_data(&self, entity: Entity) -> Option<&S> {
-        self.scene_data.get(&entity)
+        self.scene_data.get(&entity.id())
     }
-    fn remove_grid_entity(&mut self, entity: Entity) {
-        if let Some((parent, index)) = self.user_grids.remove(&entity) {
-            if let Some(scene_grid) = self.scene_grids.get_mut(&parent) {
+
+    fn remove_grid_entity(&mut self, id: u32) {
+        log::info!("entity:{} removed from manager", id);
+        if let Some((parent, index)) = self.user_grids.remove(&id) {
+            if let Some(scene_grid) = self.scene_grids.get_mut(&parent.id()) {
                 if let Some((count, grid)) = scene_grid.get_mut(&index) {
-                    if !grid.remove(entity.id()) {
-                        log::warn!("entity {} not found in set", entity.id());
+                    if !grid.remove(id) {
+                        log::warn!("entity {} not found in set", id);
                     } else {
                         *count -= 1;
                     }
@@ -329,8 +329,8 @@ where
 
     fn get_scene_around(&self, parent: &Entity, index: usize) -> BitSet {
         let mut set = BitSet::new();
-        if let Some(sd) = self.scene_data.get(parent) {
-            if let Some(grids) = self.scene_grids.get(parent) {
+        if let Some(sd) = self.scene_data.get(&parent.id()) {
+            if let Some(grids) = self.scene_grids.get(&parent.id()) {
                 for index in sd.around(index) {
                     if let Some((_, grid)) = grids.get(&index) {
                         set |= grid;
@@ -342,13 +342,23 @@ where
     }
 
     pub fn get_user_around(&self, entity: Entity) -> BitSet {
-        if let Some((parent, index)) = self.user_grids.get(&entity) {
+        if let Some((parent, index)) = self.user_grids.get(&entity.id()) {
             let mut bitset = self.get_scene_around(parent, *index);
             bitset.remove(entity.id());
             bitset
         } else {
             BitSet::new()
         }
+    }
+
+    pub fn insert_scene(&mut self, id: u32, entity: Entity) {
+        if self.scene_mapping.insert(id, entity).is_some() {
+            log::error!("scene:{} already inserted", id);
+        }
+    }
+
+    pub fn get_scene_entity(&self, id: u32) -> Option<Entity> {
+        self.scene_mapping.get(&id).map(|entity| *entity)
     }
 }
 pub type TeamHierarchy = Hierarchy<TeamMember>;

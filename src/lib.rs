@@ -231,7 +231,7 @@ impl Engine {
 
         if self.builder.profile {
             world.insert(TimeStatistic::new());
-            builder.add_thread_local("print_statistic", PrintStatisticSystem);
+            //builder.add_thread_local("print_statistic", PrintStatisticSystem);
         }
         cfg_if::cfg_if! {
             if #[cfg(feature="debug")] {
