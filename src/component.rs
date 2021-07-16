@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::{BytesSender, Output};
+use crate::{BytesSender, Output, SyncDirection};
 use mio::Token;
 use specs::{
     BitSet, Component, DenseVecStorage, Entity, FlaggedStorage, HashMapStorage, Join, NullStorage,
@@ -8,7 +8,7 @@ use specs::{
 use specs_hierarchy::Parent;
 use std::{
     cmp::Ordering,
-    ops::{Deref, DerefMut},
+    ops::{BitOrAssign, Deref, DerefMut},
 };
 
 macro_rules! component {
@@ -215,9 +215,32 @@ pub trait SceneData: Clone {
 }
 pub type TeamMember = Member<0>;
 pub type SceneMember = Member<1>;
-#[derive(Default)]
-pub struct NewSceneMember(pub Option<BitSet>);
 
-impl Component for NewSceneMember {
+#[derive(Default)]
+pub struct FullDataCommit<const T: usize> {
+    mask: BitSet,
+}
+
+impl<const T: usize> FullDataCommit<T> {
+    pub fn dir() -> SyncDirection {
+        T.into()
+    }
+    pub fn mask(&self) -> &BitSet {
+        &self.mask
+    }
+
+    pub fn add(&mut self, id: u32) {
+        self.mask.add(id);
+    }
+
+    pub fn add_mask(&mut self, mask: &BitSet) {
+        self.mask |= mask;
+    }
+}
+
+impl<const T: usize> Component for FullDataCommit<T> {
     type Storage = HashMapStorage<Self>;
 }
+
+pub type AroundFullData = FullDataCommit<1>;
+pub type TeamFullData = FullDataCommit<8>;

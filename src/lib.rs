@@ -12,7 +12,7 @@ pub(crate) mod sync;
 pub(crate) mod system;
 
 use crate::{
-    component::NewSceneMember,
+    component::FullDataCommit,
     network::async_run,
     resource::TimeStatistic,
     system::{GameSystem, PrintStatisticSystem, StatisticRunNow, StatisticSystem},
@@ -41,7 +41,7 @@ pub use system::{
     SceneSystem, TeamSystem,
 };
 
-use crate::resource::FrameCounter;
+use crate::{component::AroundFullData, resource::FrameCounter};
 #[cfg(target_os = "windows")]
 pub use libloading::os::windows::Symbol;
 #[cfg(not(target_os = "windows"))]
@@ -241,8 +241,8 @@ impl Engine {
         builder.add(CloseSystem, "close", &[]);
 
         builder.add(
-            CleanStorageSystem::<NewSceneMember>::default(),
-            "new_scene_member_clean",
+            CleanStorageSystem::<AroundFullData>::default(),
+            "around_full_data_clean",
             &[],
         );
 

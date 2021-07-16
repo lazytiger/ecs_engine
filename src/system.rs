@@ -1,5 +1,7 @@
 use crate::{
-    component::{Closing, NewSceneMember, Position, SceneData, SceneMember, TeamMember},
+    component::{
+        AroundFullData, Closing, FullDataCommit, Position, SceneData, SceneMember, TeamMember,
+    },
     dynamic::{get_library_name, Library},
     network::BytesSender,
     resource::{FrameCounter, SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
@@ -224,7 +226,7 @@ where
         Read<'a, BytesSender>,
         Entities<'a>,
         ReadExpect<'a, SceneManager<P, S>>,
-        ReadStorage<'a, NewSceneMember>,
+        ReadStorage<'a, AroundFullData>,
     );
 
     fn run(
@@ -246,15 +248,10 @@ where
             let mut data = data.clone();
             data.mask_all();
             if let Some(bytes) = data.encode(entity.id(), SyncDirection::Around) {
-                let tokens = if let Some(around) = &member.0 {
-                    NetToken::tokens(&token, around)
-                } else {
-                    let around = gm.get_user_around(entity);
-                    NetToken::tokens(&token, &around)
-                };
+                let tokens = NetToken::tokens(&token, member.mask());
                 sender.broadcast_bytes(tokens, bytes)
-                //TODO send around full data to current member
             } else {
+                log::warn!("full data synchronization required, but nothing to send");
             }
         }
 
@@ -345,7 +342,7 @@ where
         ReadStorage<'a, S>,
         WriteExpect<'a, SceneManager<P, S>>,
         ReadExpect<'a, SceneHierarchy>,
-        WriteStorage<'a, NewSceneMember>,
+        WriteStorage<'a, AroundFullData>,
     );
 
     fn run(

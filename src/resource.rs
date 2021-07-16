@@ -1,7 +1,10 @@
-use crate::component::{NewSceneMember, Position, SceneData, SceneMember, TeamMember};
+use crate::{
+    component::{AroundFullData, FullDataCommit, Position, SceneData, SceneMember, TeamMember},
+    SyncDirection,
+};
 use specs::{
-    prelude::ComponentEvent, BitSet, Component, Entities, Entity, Join, ReadExpect, ReadStorage,
-    ReaderId, Tracked, WriteStorage,
+    prelude::ComponentEvent, storage::GenericWriteStorage, BitSet, Component, Entities, Entity,
+    Join, ReadExpect, ReadStorage, ReaderId, Tracked, WriteStorage,
 };
 use specs_hierarchy::{Hierarchy, HierarchyEvent, Parent};
 use std::{
@@ -127,7 +130,7 @@ where
         scene: ReadStorage<'a, SceneMember>,
         scene_data: ReadStorage<'a, S>,
         scene_hierarchy: ReadExpect<'a, SceneHierarchy>,
-        mut new_scene_member: WriteStorage<'a, NewSceneMember>,
+        mut new_scene_member: WriteStorage<'a, AroundFullData>,
     ) {
         let begin = Instant::now();
         let mut modified = BitSet::default();
@@ -187,9 +190,8 @@ where
             if let Some(sd) = scene_data.get(parent) {
                 if let Some(index) = sd.grid_index(pos.x(), pos.y()) {
                     self.insert_grid_entity(parent, entity, index);
-                    if let Err(err) = new_scene_member.insert(entity, NewSceneMember(None)) {
-                        log::error!("insert new scene member failed:{}", err);
-                    }
+                    let afdc = new_scene_member.get_mut_or_default(entity).unwrap();
+                    afdc.add_mask(&self.get_user_around(entity));
                 }
             } else {
                 log::error!("scene not found");
@@ -233,10 +235,13 @@ where
                                     set |= grid;
                                 }
                             }
-                            if let Err(err) =
-                                new_scene_member.insert(entity, NewSceneMember(Some(set)))
-                            {
-                                log::error!("new scene member failed:{}", err);
+                            set.remove(entity.id());
+                            let afdc = new_scene_member.get_mut_or_default(entity).unwrap();
+                            afdc.add_mask(&set);
+                            let id = entity.id();
+                            for (entity, _) in (&entities, &set).join() {
+                                let afdc = new_scene_member.get_mut_or_default(entity).unwrap();
+                                afdc.add(id);
                             }
 
                             if let Some((count, grid)) = grids.get_mut(&index) {

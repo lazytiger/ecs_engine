@@ -15,10 +15,33 @@ use serde_derive::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum SyncDirection {
+    Around,
     Client,
     Database,
     Team,
-    Around,
+}
+
+impl From<usize> for SyncDirection {
+    fn from(index: usize) -> Self {
+        match index {
+            1 => SyncDirection::Around,
+            2 => SyncDirection::Client,
+            4 => SyncDirection::Database,
+            8 => SyncDirection::Team,
+            _ => panic!("invalid index:{}", index),
+        }
+    }
+}
+
+impl Into<usize> for SyncDirection {
+    fn into(self) -> usize {
+        match self {
+            SyncDirection::Around => 1,
+            SyncDirection::Client => 2,
+            SyncDirection::Database => 4,
+            SyncDirection::Team => 8,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -126,12 +149,8 @@ impl Config {
         for f in &self.fields {
             if let Some(dirs) = &f.dirs {
                 for dir in dirs {
-                    match dir {
-                        SyncDirection::Client => mask |= 1,
-                        SyncDirection::Database => mask |= 1 << 1,
-                        SyncDirection::Team => mask |= 1 << 2,
-                        SyncDirection::Around => mask |= 1 << 3,
-                    }
+                    let dir: usize = (*dir).into();
+                    mask |= dir;
                 }
             } else {
                 return 0x0f;
@@ -487,22 +506,28 @@ impl Generator {
 
             impl<T:Message + Default + Clone, const N:usize, const C: u32> Type<T, N, C> {
                 pub fn new() ->Self {
-                    let client_mask = if N & 0x1 != 0 {
+                    let around_mask:usize = SyncDirection::Around.into();
+                    let client_mask:usize = SyncDirection::Client.into();
+                    let database_mask:usize = SyncDirection::Database.into();
+                    let team_mask:usize = SyncDirection::Team.into();
+
+                    let around_mask = if N & around_mask != 0 {
                         Some(MaskSet::default())
                     } else {
                         None
                     };
-                    let database_mask = if N & 0x02 != 0 {
+
+                    let client_mask = if N & client_mask != 0 {
                         Some(MaskSet::default())
                     } else {
                         None
                     };
-                    let team_mask = if N & 0x04 != 0 {
+                    let database_mask = if N & database_mask != 0 {
                         Some(MaskSet::default())
                     } else {
                         None
                     };
-                    let around_mask = if N & 0x08 != 0 {
+                    let team_mask = if N & team_mask != 0 {
                         Some(MaskSet::default())
                     } else {
                         None
