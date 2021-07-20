@@ -36,5 +36,5 @@ pub trait DataSet: Clone {
 
     fn is_data_dirty(&self) -> bool;
 
-    fn is_direction_enabled(&self, dir: SyncDirection) -> bool;
+    fn is_direction_enabled(dir: SyncDirection) -> bool;
 }

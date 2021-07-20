@@ -5,7 +5,7 @@ use protobuf::{
     reflect::MessageDescriptor, Clear, CodedInputStream, CodedOutputStream, Message,
     ProtobufResult, UnknownFields,
 };
-use specs::{Component, Entity, FlaggedStorage, NullStorage, Tracked};
+use specs::{Component, Entity, FlaggedStorage, NullStorage, Tracked, World, WorldExt};
 use std::{any::Any, ops::Deref};
 
 /// Trait for requests enum type, it's an aggregation of all requests
@@ -49,12 +49,16 @@ pub trait DropEntity: Output + Default {
 
 pub trait SceneSyncBackend
 where
-    <<Self as SceneSyncBackend>::Position as Component>::Storage: Tracked,
-    <<Self as SceneSyncBackend>::SceneData as Component>::Storage: Tracked,
+    <<Self as SceneSyncBackend>::Position as Component>::Storage: Tracked + Default,
+    <<Self as SceneSyncBackend>::SceneData as Component>::Storage: Tracked + Default,
 {
     type Position: Position + Component;
     type SceneData: SceneData + Component + Send + Sync;
     type DropEntity: DropEntity;
+    fn setup(world: &mut World) {
+        world.register::<Self::SceneData>();
+        world.register::<Self::Position>();
+    }
 }
 
 pub struct DummySceneSyncBackend;

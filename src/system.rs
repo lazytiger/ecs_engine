@@ -212,8 +212,8 @@ where
     <T as Deref>::Target: Mask,
     T: DerefMut,
     B: SceneSyncBackend + Send + Sync + 'static,
-    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked,
-    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked,
+    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked + Default,
+    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked + Default,
 {
     type SystemData = (
         WriteStorage<'a, T>,
@@ -238,21 +238,16 @@ where
         }
 
         // 处理有新玩家进入时需要完整数据集的情况
-        for (data, member, entity) in (&data, &new_scene_member, &entities).join() {
-            if !data.is_direction_enabled(SyncDirection::Around) {
-                log::info!(
-                    "type {} is not enabled by Around",
-                    std::any::type_name::<T>()
-                );
-                break;
-            }
-            let mut data = data.clone();
-            data.mask_all();
-            if let Some(bytes) = data.encode(entity.id(), SyncDirection::Around) {
-                let tokens = NetToken::tokens(&token, member.mask());
-                sender.broadcast_bytes(tokens, bytes)
-            } else {
-                log::warn!("full data synchronization required, but nothing to send");
+        if T::is_direction_enabled(SyncDirection::Around) {
+            for (data, member, entity) in (&data, &new_scene_member, &entities).join() {
+                let mut data = data.clone();
+                data.mask_all();
+                if let Some(bytes) = data.encode(entity.id(), SyncDirection::Around) {
+                    let tokens = NetToken::tokens(&token, member.mask());
+                    sender.broadcast_bytes(tokens, bytes)
+                } else {
+                    log::warn!("full data synchronization required, but nothing to send");
+                }
             }
         }
 
@@ -274,20 +269,26 @@ where
         }
 
         // 处理针对组队的数据集
-        for (data, id, team) in (&mut data, &modified, &teams).join() {
-            if let Some(bytes) = data.encode(id, SyncDirection::Team) {
-                let members = hteams.all_children(team.parent_entity());
-                let tokens = NetToken::tokens(&token, &members);
-                sender.broadcast_bytes(tokens, bytes);
+        if T::is_direction_enabled(SyncDirection::Team) {
+            for (data, id, team) in (&mut data, &modified, &teams).join() {
+                if let Some(bytes) = data.encode(id, SyncDirection::Team) {
+                    let members = hteams.all_children(team.parent_entity());
+                    let tokens = NetToken::tokens(&token, &members);
+                    sender.broadcast_bytes(tokens, bytes);
+                }
             }
         }
 
         // 处理针对场景的数据集
-        for (data, id, entity, _) in (&mut data, &modified, &entities, !&new_scene_member).join() {
-            if let Some(bytes) = data.encode(id, SyncDirection::Around) {
-                let around = gm.get_user_around(entity);
-                let tokens = NetToken::tokens(&token, &around);
-                sender.broadcast_bytes(tokens, bytes)
+        if T::is_direction_enabled(SyncDirection::Around) {
+            for (data, id, entity, _) in
+                (&mut data, &modified, &entities, !&new_scene_member).join()
+            {
+                if let Some(bytes) = data.encode(id, SyncDirection::Around) {
+                    let around = gm.get_user_around(entity);
+                    let tokens = NetToken::tokens(&token, &around);
+                    sender.broadcast_bytes(tokens, bytes)
+                }
             }
         }
 
@@ -305,8 +306,8 @@ pub struct GridSystem<B> {
 impl<'a, B> GridSystem<B>
 where
     B: SceneSyncBackend + Send + Sync + 'static,
-    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked,
-    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked,
+    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked + Default,
+    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked + Default,
 {
     pub fn new(world: &mut World) -> Self {
         if !world.has_value::<SceneManager<B>>() {
@@ -331,8 +332,8 @@ where
 impl<'a, B> System<'a> for GridSystem<B>
 where
     B: SceneSyncBackend + Send + Sync + 'static,
-    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked,
-    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked,
+    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked + Default,
+    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked + Default,
 {
     type SystemData = (
         Entities<'a>,

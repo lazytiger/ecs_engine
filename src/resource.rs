@@ -88,8 +88,8 @@ impl FrameCounter {
 pub struct SceneManager<B>
 where
     B: SceneSyncBackend,
-    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked,
-    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked,
+    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked + Default,
+    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked + Default,
 {
     position_reader: ReaderId<ComponentEvent>,
     scene_reader: ReaderId<ComponentEvent>,
@@ -106,8 +106,8 @@ where
 impl<B> SceneManager<B>
 where
     B: SceneSyncBackend,
-    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked,
-    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked,
+    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked + Default,
+    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked + Default,
 {
     pub fn new(
         position_reader: ReaderId<ComponentEvent>,

@@ -25,7 +25,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-pub use backend::{DropEntity, Input, Output, SceneSyncBackend};
+pub use backend::{CommandId, DropEntity, Input, Output, SceneSyncBackend};
 pub use codegen::{export, init_log, request, setup, system};
 pub use component::{
     Closing, HashComponent, NetToken, Position, SceneData, SceneMember, SelfSender, TeamMember,

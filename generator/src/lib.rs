@@ -205,6 +205,10 @@ pub enum Error {
     Ron(ron::Error, PathBuf),
     DuplicateFieldNumber(String),
     DuplicateCmd,
+    DuplicateDropEntity,
+    DuplicatePosition,
+    DuplicateSceneData,
+    InvalidDropEntity,
     ComponentListUsed(PathBuf, String),
 }
 
@@ -306,8 +310,34 @@ impl Generator {
         self.gen_io_config(
             "response",
             self.response_dir.clone(),
-            |mods, names, files, inners, cmds| {
-                quote!(
+            |configs, mods, names, files, inners, cmds| {
+                let mut drop_entity = quote!();
+                for (_, cf) in configs {
+                    for config in cf.configs {
+                        let name = format_ident!("{}", config.name);
+                        if let Some(traits) = config.traits {
+                            for t in traits {
+                                if let Trait::DropEntity { entities } = t {
+                                    if !drop_entity.is_empty() {
+                                        return Err(Error::DuplicateDropEntity);
+                                    }
+                                    let fname = format_ident!(
+                                        "{}",
+                                        entities.unwrap_or("mut_entities".into())
+                                    );
+                                    drop_entity = quote!(
+                                        impl ecs_engine::DropEntity for #name {
+                                            fn mut_entities(&mut self) -> &mut Vec<u32> {
+                                                self.data.#fname()
+                                            }
+                                        }
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                let code = quote!(
                     #(mod #mods;)*
 
                     use ecs_engine::Output;
@@ -317,11 +347,12 @@ impl Generator {
                     #(pub type #names = Response<#files::#names>;)*
                     #(pub use #inners;)*
 
-                    pub struct Response<T> {
+                    #[derive(Default)]
+                    pub struct Response<T:Default> {
                         data:T
                     }
 
-                    impl<T> Deref for Response<T> {
+                    impl<T:Default> Deref for Response<T> {
                         type Target = T;
 
                         fn deref(&self) -> &Self::Target {
@@ -329,19 +360,19 @@ impl Generator {
                         }
                     }
 
-                    impl<T> DerefMut for Response<T> {
+                    impl<T:Default> DerefMut for Response<T> {
                         fn deref_mut(&mut self) -> &mut Self::Target {
                             &mut self.data
                         }
                     }
 
-                    impl<T> From<T> for Response<T> {
+                    impl<T:Default> From<T> for Response<T> {
                         fn from(data: T) -> Self {
                             Response { data }
                         }
                     }
 
-                    impl<T: Message> Response<T> {
+                    impl<T: Message + Default> Response<T> {
                         pub fn new() -> Self {
                             Self { data: T::new() }
                         }
@@ -354,8 +385,11 @@ impl Generator {
                             }
                         }
                     )*
+
+                    #drop_entity
                 )
-                .to_string()
+                .to_string();
+                Ok(code)
             },
         )
     }
@@ -407,6 +441,8 @@ impl Generator {
             SyncDirection::Around,
             SyncDirection::Client,
         ];
+        let mut position_code = quote!();
+        let mut scene_data_code = quote!();
         for (f, cf) in &configs {
             let mod_name = format_ident!("{}", f.file_stem().unwrap().to_str().unwrap());
             mods.push(mod_name.clone());
@@ -416,13 +452,95 @@ impl Generator {
                 let name = format_ident!("{}", c.name);
                 if let Some(traits) = &c.traits {
                     for t in traits {
-                        if let Trait::Component { .. } = t {
-                            files.push(mod_name.clone());
-                            names.push(name.clone());
-                            storages.push(t.to_rust_type());
-                            ns.push(c.get_dir_mask());
-                            cmds.push(Self::string_to_u32(vname.as_bytes()));
+                        match t {
+                            Trait::Component { .. } => {
+                                files.push(mod_name.clone());
+                                names.push(name.clone());
+                                storages.push(t.to_rust_type());
+                                ns.push(c.get_dir_mask());
+                                cmds.push(Self::string_to_u32(vname.as_bytes()));
+                            }
+                            Trait::Position { x, y } => {
+                                if !position_code.is_empty() {
+                                    return Err(Error::DuplicatePosition);
+                                }
+                                let x = format_ident!("{}", x.clone().unwrap_or("get_x".into()));
+                                let y = format_ident!("{}", y.clone().unwrap_or("get_y".into()));
+
+                                position_code = quote!(
+                                    impl ecs_engine::Position for #name {
+                                        fn x(&self) -> f32 {
+                                            self.data.#x()
+                                        }
+                                        fn y(&self) -> f32 {
+                                            self.data.#y()
+                                        }
+                                    }
+                                );
+                            }
+                            Trait::SceneData {
+                                id,
+                                min_x,
+                                min_y,
+                                row,
+                                column,
+                                grid_size,
+                            } => {
+                                if !scene_data_code.is_empty() {
+                                    return Err(Error::DuplicateSceneData);
+                                }
+                                let id = format_ident!("{}", id.clone().unwrap_or("get_id".into()));
+                                let min_x = format_ident!(
+                                    "{}",
+                                    min_x.clone().unwrap_or("get_min_x".into())
+                                );
+                                let min_y = format_ident!(
+                                    "{}",
+                                    min_y.clone().unwrap_or("get_min_y".into())
+                                );
+                                let row =
+                                    format_ident!("{}", row.clone().unwrap_or("get_row".into()));
+                                let column = format_ident!(
+                                    "{}",
+                                    column.clone().unwrap_or("get_column".into())
+                                );
+                                let grid_size = format_ident!(
+                                    "{}",
+                                    grid_size.clone().unwrap_or("get_grid_size".into())
+                                );
+                                scene_data_code = quote!(
+                                    impl ecs_engine::SceneData for #name {
+                                        fn id(&self) -> u32 {
+                                            self.data.#id()
+                                        }
+
+                                        fn get_min_x(&self) -> f32 {
+                                            self.data.#min_x()
+                                        }
+
+                                        fn get_min_y(&self) -> f32 {
+                                            self.data.#min_y()
+                                        }
+
+                                        fn get_column(&self) -> i32 {
+                                            self.data.#column()
+                                        }
+
+                                        fn get_row(&self) -> i32 {
+                                            self.data.#row()
+                                        }
+
+                                        fn grid_size(&self) -> f32 {
+                                            self.data.#grid_size()
+                                        }
+                                    }
+                                );
+                            }
+                            Trait::DropEntity { .. } => {
+                                return Err(Error::InvalidDropEntity);
+                            }
                         }
+                        if let Trait::Component { .. } = t {}
                     }
                 } else {
                     inners.push(quote!(#mod_name::#name));
@@ -513,7 +631,7 @@ impl Generator {
                 ops::{Deref, DerefMut},
             };
             use protobuf::{Message, MaskSet, Mask};
-            use ecs_engine::{ChangeSet, SyncDirection, DataSet, CommitChangeSystem, GameDispatcherBuilder,};
+            use ecs_engine::{ChangeSet, SyncDirection, DataSet, CommitChangeSystem, GameDispatcherBuilder, SceneSyncBackend};
             use byteorder::{BigEndian, ByteOrder};
             #(pub use #inners;)*
 
@@ -646,13 +764,9 @@ impl Generator {
                     self.data.is_dirty()
                 }
 
-                fn is_direction_enabled(&self, dir:SyncDirection) -> bool {
-                    match dir {
-                        SyncDirection::Client => self.client_mask.is_some(),
-                        SyncDirection::Database => self.database_mask.is_some(),
-                        SyncDirection::Team => self.team_mask.is_some(),
-                        SyncDirection::Around => self.around_mask.is_some(),
-                    }
+                fn is_direction_enabled(dir:SyncDirection) -> bool {
+                    let mask:usize = dir.into();
+                    mask & N != 0
                 }
             }
 
@@ -689,15 +803,17 @@ impl Generator {
 
             #(#cs_codes)*
 
-            pub fn setup<P, S>(builder:&mut GameDispatcherBuilder)
+            #position_code
+            #scene_data_code
+
+            pub fn setup<B>(builder:&mut GameDispatcherBuilder)
             where
-                P: Component + ecs_engine::Position + Send + Sync + 'static,
-                P::Storage: Tracked,
-                S: Component + ecs_engine::SceneData + Send + Sync + 'static,
-                S::Storage: Tracked,
+                B: SceneSyncBackend + Send + Sync + 'static,
+                <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked + Default,
+                <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked + Default,
             {
                 #(
-                    builder.add(CommitChangeSystem::<#names, P, S>::default(), #vnames, &[]);
+                    builder.add(CommitChangeSystem::<#names, B>::default(), #vnames, &[]);
                 )*
             }
         )
@@ -760,7 +876,14 @@ impl Generator {
 
     fn gen_io_config<F>(&self, config_type: &str, dir: PathBuf, codegen: F) -> Result<(), Error>
     where
-        F: Fn(Vec<Ident>, Vec<Ident>, Vec<Ident>, Vec<TokenStream>, Vec<u32>) -> String,
+        F: Fn(
+            Vec<(PathBuf, ConfigFile)>,
+            Vec<Ident>,
+            Vec<Ident>,
+            Vec<Ident>,
+            Vec<TokenStream>,
+            Vec<u32>,
+        ) -> Result<String, Error>,
     {
         let mut config_dir = self.config_dir.clone();
         config_dir.push(config_type);
@@ -800,7 +923,7 @@ impl Generator {
         if cmd_count != n_cmds.len() {
             return Err(Error::DuplicateCmd);
         }
-        let data = codegen(mods, names, files, inners, cmds);
+        let data = codegen(configs, mods, names, files, inners, cmds)?;
 
         let mut name = dir.clone();
         name.push("mod.rs");
@@ -823,7 +946,7 @@ impl Generator {
         self.gen_io_config(
             "request",
             self.request_dir.clone(),
-            |mods, names, files, inners, cmds| {
+            |configs, mods, names, files, inners, cmds| {
                 let vnames: Vec<_> = names
                     .iter()
                     .map(|name| format_ident!("{}", name.to_string().to_case(Case::Snake)))
@@ -1008,7 +1131,7 @@ impl Generator {
                     )
                 };
 
-                quote!(
+                let code = quote!(
                     #![allow(dead_code)]
                     #![allow(unused_variables)]
                     #(mod #mods;)*
@@ -1080,7 +1203,8 @@ impl Generator {
                         #do_next
 
                     }
-                ).to_string()
+                ).to_string();
+                Ok(code)
             },
         )
     }
