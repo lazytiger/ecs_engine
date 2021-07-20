@@ -39,8 +39,8 @@ impl Library {
         let mut bname = name.as_bytes().to_owned();
         bname.push(0);
         unsafe {
-            match self.lib.as_ref().unwrap().get::<fn()>(bname.as_slice()) {
-                Ok(f) => Some(std::mem::transmute(f.into_raw())),
+            match self.lib.as_ref().unwrap().get::<T>(bname.as_slice()) {
+                Ok(f) => Some(f.into_raw()),
                 Err(err) => {
                     log::error!(
                         "get function {} from library {} failed {}",
