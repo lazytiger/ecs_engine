@@ -13,7 +13,7 @@ pub(crate) mod system;
 use crate::{
     network::async_run,
     resource::TimeStatistic,
-    system::{GameSystem, StatisticRunNow, StatisticSystem},
+    system::{GameSystem, PrintStatisticSystem, StatisticRunNow, StatisticSystem},
 };
 
 use crate::{component::AroundFullData, resource::FrameCounter};
@@ -197,7 +197,7 @@ impl Engine {
 
         if self.builder.profile {
             world.insert(TimeStatistic::new());
-            //builder.add_thread_local("print_statistic", PrintStatisticSystem);
+            builder.add_thread_local("print_statistic", PrintStatisticSystem);
         }
         cfg_if::cfg_if! {
             if #[cfg(feature="debug")] {
@@ -205,7 +205,7 @@ impl Engine {
             }
         }
         builder.add(CloseSystem, "close", &[]);
-
+        builder.add_barrier();
         builder.add(
             CleanStorageSystem::<AroundFullData>::default(),
             "around_full_data_clean",
@@ -250,37 +250,28 @@ pub struct GameDispatcherBuilder<'a, 'b> {
 }
 
 impl<'a, 'b> GameDispatcherBuilder<'a, 'b> {
-    pub fn new(statistic: bool) -> Self {
+    pub fn new(profile: bool) -> Self {
         Self {
             builder: DispatcherBuilder::new(),
-            profile: statistic,
+            profile,
         }
     }
 
-    pub fn with_builder(builder: DispatcherBuilder<'a, 'b>, statistic: bool) -> Self {
-        Self {
-            builder,
-            profile: statistic,
-        }
+    pub fn with_builder(builder: DispatcherBuilder<'a, 'b>, profile: bool) -> Self {
+        Self { builder, profile }
     }
 
     pub fn with<T>(self, system: T, name: &str, dep: &[&str]) -> Self
     where
         for<'c> T: GameSystem<'c> + System<'c> + Send + 'a,
     {
-        let GameDispatcherBuilder {
-            profile: statistic,
-            builder,
-        } = self;
-        let builder = if statistic {
+        let GameDispatcherBuilder { profile, builder } = self;
+        let builder = if profile {
             builder.with(StatisticSystem(name.into(), system), name, dep)
         } else {
             builder.with(system, name, dep)
         };
-        Self {
-            builder,
-            profile: statistic,
-        }
+        Self { builder, profile }
     }
 
     pub fn add<T>(&mut self, system: T, name: &str, dep: &[&str])
@@ -299,19 +290,13 @@ impl<'a, 'b> GameDispatcherBuilder<'a, 'b> {
     where
         T: for<'c> RunNow<'c> + 'b,
     {
-        let GameDispatcherBuilder {
-            profile: statistic,
-            builder,
-        } = self;
-        let builder = if statistic {
+        let GameDispatcherBuilder { profile, builder } = self;
+        let builder = if profile {
             builder.with_thread_local(StatisticRunNow(name.into(), system))
         } else {
             builder.with_thread_local(system)
         };
-        Self {
-            builder,
-            profile: statistic,
-        }
+        Self { builder, profile }
     }
 
     pub fn add_thread_local<T>(&mut self, name: &str, system: T)
@@ -324,6 +309,16 @@ impl<'a, 'b> GameDispatcherBuilder<'a, 'b> {
         } else {
             self.builder.add_thread_local(system);
         }
+    }
+
+    pub fn add_barrier(&mut self) {
+        self.builder.add_barrier()
+    }
+
+    pub fn with_barrier(self) -> Self {
+        let GameDispatcherBuilder { profile, builder } = self;
+        let builder = builder.with_barrier();
+        Self { builder, profile }
     }
 
     pub fn build(self) -> Dispatcher<'a, 'b> {

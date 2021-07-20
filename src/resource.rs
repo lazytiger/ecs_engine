@@ -127,6 +127,41 @@ where
         }
     }
 
+    fn drop_entities<'a>(
+        entity: Entity,
+        set: BitSet,
+        storage: &ReadStorage<'a, NetToken>,
+        sender: &BytesSender,
+    ) {
+        if set.is_empty() {
+            return;
+        }
+
+        let tokens = NetToken::tokens(storage, &set);
+        let mut drop_entity = B::DropEntity::default();
+        drop_entity.add(entity.id());
+        sender.broadcast_data(tokens, entity.id(), drop_entity);
+
+        if let Some(token) = storage.get(entity) {
+            let mut drop_entity = B::DropEntity::default();
+            drop_entity.add_set(set.iter());
+            sender.send_data(token.token(), entity.id(), drop_entity);
+        }
+    }
+
+    fn add_full_data_commit<'a>(
+        entity: Entity,
+        set: BitSet,
+        storage: &mut WriteStorage<'a, AroundFullData>,
+        entities: &Entities<'a>,
+    ) {
+        let afdc = storage.get_mut_or_default(entity).unwrap();
+        afdc.add_mask(&set);
+        for (entity, _) in (entities, &set).join() {
+            storage.get_mut_or_default(entity).unwrap().add(entity.id());
+        }
+    }
+
     pub(crate) fn maintain<'a>(
         &mut self,
         entities: Entities<'a>,
@@ -188,16 +223,11 @@ where
 
         for (entity, removed) in (&entities, &removed).join() {
             let around = self.get_user_around(entity);
-            if !around.is_empty() {
-                let tokens = NetToken::tokens(&tokens, &around);
-                let mut drop_entity = B::DropEntity::default();
-                drop_entity.add(removed);
-                sender.broadcast_data(tokens, 0, drop_entity);
-                self.remove_grid_entity(removed);
-            }
+            Self::drop_entities(entity, around, &tokens, &sender);
+            self.remove_grid_entity(removed);
         }
 
-        for (entity, pos, scene, id) in (&entities, &positions, &scene, &inserted).join() {
+        for (entity, pos, scene, _id) in (&entities, &positions, &scene, &inserted).join() {
             let parent = scene.parent_entity();
             if let Some(sd) = scene_data.get(parent) {
                 if let Some(index) = sd.grid_index(pos.x(), pos.y()) {
@@ -208,12 +238,8 @@ where
                         parent.id(),
                         index
                     );
-                    let afdc = new_scene_member.get_mut_or_default(entity).unwrap();
                     let around = self.get_user_around(entity);
-                    afdc.add_mask(&around);
-                    for (entity, _) in (&entities, &around).join() {
-                        new_scene_member.get_mut_or_default(entity).unwrap().add(id);
-                    }
+                    Self::add_full_data_commit(entity, around, &mut new_scene_member, &entities);
                 } else {
                     log::error!(
                         "invalid position:[{},{}] for scene:{}",
@@ -246,20 +272,15 @@ where
                         );
                         let (removed, _, inserted) = sd.diff(index, new_index);
                         let inserted = self.get_user_grids(&entity, inserted);
-                        let afdc = new_scene_member.get_mut_or_default(entity).unwrap();
-                        afdc.add_mask(&inserted);
-                        for (entity, _) in (&entities, &inserted).join() {
-                            let afdc = new_scene_member.get_mut_or_default(entity).unwrap();
-                            afdc.add(id);
-                        }
+                        Self::add_full_data_commit(
+                            entity,
+                            inserted,
+                            &mut new_scene_member,
+                            &entities,
+                        );
 
                         let removed = self.get_user_grids(&entity, removed);
-                        if !removed.is_empty() {
-                            let tokens = NetToken::tokens(&tokens, &removed);
-                            let mut drop_entity = B::DropEntity::default();
-                            drop_entity.add(id);
-                            sender.broadcast_data(tokens, 0, drop_entity);
-                        }
+                        Self::drop_entities(entity, removed, &tokens, &sender);
                         self.remove_grid_entity(id);
                         self.insert_grid_entity(parent, entity, new_index);
                     } else {
@@ -290,7 +311,11 @@ where
             })
             .collect();
         empty_scene.iter().for_each(|entity| {
-            self.scene_grids.remove(entity);
+            log::info!("scene:{} deleted", entity);
+            let entity = entities.entity(*entity);
+            if let Err(err) = entities.delete(entity) {
+                log::error!("delete entity:{} failed:{}", entity.id(), err);
+            }
         });
 
         //log::info!("grid system cost:{}us", begin.elapsed().as_micros());
@@ -348,7 +373,7 @@ where
 
     fn get_user_grids(&self, entity: &Entity, indexes: Vec<usize>) -> BitSet {
         let mut set = BitSet::new();
-        if let Some((parent, _)) = self.user_grids.get((&entity.id())) {
+        if let Some((parent, _)) = self.user_grids.get(&entity.id()) {
             if let Some(grids) = self.scene_grids.get(&parent.id()) {
                 for index in indexes {
                     if let Some((_, grid)) = grids.get(&index) {

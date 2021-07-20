@@ -726,6 +726,9 @@ impl BytesSender {
                 self.max_response_size
             );
         }
+        if tokens.is_empty() {
+            return;
+        }
         self.broadcast(tokens, Response::Data(bytes));
     }
 

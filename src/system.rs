@@ -257,14 +257,19 @@ where
 
         // 处理针对玩家的数据集
         let mut modified = BitSet::new();
-        for (data, token, entity) in (&mut data, &token, &entities).join() {
+        for (data, entity) in (&mut data, &entities).join() {
             if data.is_data_dirty() {
                 data.commit();
-                let bytes = data.encode(entity.id(), SyncDirection::Client);
+            }
+            modified.add(entity.id());
+        }
+
+        if T::is_direction_enabled(SyncDirection::Client) {
+            for (data, id, token) in (&mut data, &modified, &token).join() {
+                let bytes = data.encode(id, SyncDirection::Client);
                 if let Some(bytes) = bytes {
                     sender.send_bytes(token.token(), bytes);
                 }
-                modified.add(entity.id());
             }
         }
 

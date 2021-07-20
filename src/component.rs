@@ -208,7 +208,7 @@ pub trait SceneData: Clone {
         if i < old.len() {
             only_old.extend_from_slice(&old.as_slice()[i..]);
         }
-        if j < old.len() {
+        if j < new.len() {
             only_new.extend_from_slice(&new.as_slice()[j..]);
         }
 
