@@ -1,10 +1,11 @@
 use crate::{
+    backend::DropEntity,
     component::{AroundFullData, Position, SceneData, SceneMember, TeamMember},
-    SceneSyncBackend,
+    BytesSender, NetToken, SceneSyncBackend,
 };
 use specs::{
-    prelude::ComponentEvent, storage::GenericWriteStorage, BitSet, Component, Entities, Entity,
-    Join, ReadExpect, ReadStorage, ReaderId, Tracked, WriteStorage,
+    hibitset::BitSetLike, prelude::ComponentEvent, storage::GenericWriteStorage, BitSet, Component,
+    Entities, Entity, Join, Read, ReadExpect, ReadStorage, ReaderId, Tracked, WriteStorage,
 };
 use specs_hierarchy::{Hierarchy, HierarchyEvent, Parent};
 use std::{
@@ -134,6 +135,8 @@ where
         scene_data: ReadStorage<'a, B::SceneData>,
         scene_hierarchy: ReadExpect<'a, SceneHierarchy>,
         mut new_scene_member: WriteStorage<'a, AroundFullData>,
+        tokens: ReadStorage<'a, NetToken>,
+        sender: Read<'a, BytesSender>,
     ) {
         let begin = Instant::now();
         let mut modified = BitSet::default();
@@ -163,7 +166,6 @@ where
             match event {
                 HierarchyEvent::Removed(entity) => {
                     removed.add(entity.id());
-                    self.remove_grid_entity(entity.id());
                 }
                 _ => {}
             }
@@ -179,12 +181,23 @@ where
                     inserted.add(*id);
                 }
                 ComponentEvent::Removed(id) => {
-                    self.remove_grid_entity(*id);
+                    removed.add(*id);
                 }
             }
         }
 
-        for (entity, pos, scene, _) in (&entities, &positions, &scene, &inserted).join() {
+        for (entity, removed) in (&entities, &removed).join() {
+            let around = self.get_user_around(entity);
+            if !around.is_empty() {
+                let tokens = NetToken::tokens(&tokens, &around);
+                let mut drop_entity = B::DropEntity::default();
+                drop_entity.add(removed);
+                sender.broadcast_data(tokens, 0, drop_entity);
+                self.remove_grid_entity(removed);
+            }
+        }
+
+        for (entity, pos, scene, id) in (&entities, &positions, &scene, &inserted).join() {
             let parent = scene.parent_entity();
             if let Some(sd) = scene_data.get(parent) {
                 if let Some(index) = sd.grid_index(pos.x(), pos.y()) {
@@ -198,7 +211,6 @@ where
                     let afdc = new_scene_member.get_mut_or_default(entity).unwrap();
                     let around = self.get_user_around(entity);
                     afdc.add_mask(&around);
-                    let id = entity.id();
                     for (entity, _) in (&entities, &around).join() {
                         new_scene_member.get_mut_or_default(entity).unwrap().add(id);
                     }
@@ -232,33 +244,23 @@ where
                             parent.id(),
                             new_index
                         );
-                        let (_, _, inserted) = sd.diff(index, new_index);
-                        if let Some(grids) = self.scene_grids.get_mut(&parent.id()) {
-                            let mut set = BitSet::new();
-                            for insert in inserted {
-                                if let Some((_, grid)) = grids.get(&insert) {
-                                    set |= grid;
-                                }
-                            }
-                            set.remove(entity.id());
+                        let (removed, _, inserted) = sd.diff(index, new_index);
+                        let inserted = self.get_user_grids(&entity, inserted);
+                        let afdc = new_scene_member.get_mut_or_default(entity).unwrap();
+                        afdc.add_mask(&inserted);
+                        for (entity, _) in (&entities, &inserted).join() {
                             let afdc = new_scene_member.get_mut_or_default(entity).unwrap();
-                            afdc.add_mask(&set);
-                            let id = entity.id();
-                            for (entity, _) in (&entities, &set).join() {
-                                let afdc = new_scene_member.get_mut_or_default(entity).unwrap();
-                                afdc.add(id);
-                            }
-
-                            if let Some((count, grid)) = grids.get_mut(&index) {
-                                if grid.remove(entity.id()) {
-                                    *count -= 1;
-                                } else {
-                                    log::warn!("entity:{} not found in set", entity.id());
-                                }
-                            }
-                        } else {
-                            log::error!("scene:{} not found in grid manager", parent.id());
+                            afdc.add(id);
                         }
+
+                        let removed = self.get_user_grids(&entity, removed);
+                        if !removed.is_empty() {
+                            let tokens = NetToken::tokens(&tokens, &removed);
+                            let mut drop_entity = B::DropEntity::default();
+                            drop_entity.add(id);
+                            sender.broadcast_data(tokens, 0, drop_entity);
+                        }
+                        self.remove_grid_entity(id);
                         self.insert_grid_entity(parent, entity, new_index);
                     } else {
                         log::error!(
@@ -340,6 +342,21 @@ where
                     }
                 }
             }
+        }
+        set
+    }
+
+    fn get_user_grids(&self, entity: &Entity, indexes: Vec<usize>) -> BitSet {
+        let mut set = BitSet::new();
+        if let Some((parent, _)) = self.user_grids.get((&entity.id())) {
+            if let Some(grids) = self.scene_grids.get(&parent.id()) {
+                for index in indexes {
+                    if let Some((_, grid)) = grids.get(&index) {
+                        set |= grid;
+                    }
+                }
+            }
+            set.remove(entity.id());
         }
         set
     }

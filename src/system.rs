@@ -343,11 +343,23 @@ where
         WriteExpect<'a, SceneManager<B>>,
         ReadExpect<'a, SceneHierarchy>,
         WriteStorage<'a, AroundFullData>,
+        ReadStorage<'a, NetToken>,
+        Read<'a, BytesSender>,
     );
 
     fn run(
         &mut self,
-        (entities, positions, scene, scene_data, mut sm, hierarchy, new_scene_member): Self::SystemData,
+        (
+            entities,
+            positions,
+            scene,
+            scene_data,
+            mut sm,
+            hierarchy,
+            new_scene_member,
+            tokens,
+            sender,
+        ): Self::SystemData,
     ) {
         sm.maintain(
             entities,
@@ -356,6 +368,8 @@ where
             scene_data,
             hierarchy,
             new_scene_member,
+            tokens,
+            sender,
         );
     }
 }
