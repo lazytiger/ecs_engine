@@ -54,25 +54,46 @@ pub enum StorageType {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Component {
-    pub storage: StorageType,
-    pub flagged: Option<bool>,
+pub enum Trait {
+    Component {
+        storage: StorageType,
+        flagged: Option<bool>,
+    },
+    Position {
+        x: Option<String>,
+        y: Option<String>,
+    },
+    SceneData {
+        id: Option<String>,
+        min_x: Option<String>,
+        min_y: Option<String>,
+        column: Option<String>,
+        row: Option<String>,
+        grid_size: Option<String>,
+    },
+    DropEntity {
+        entities: Option<String>,
+    },
 }
 
-impl Component {
+impl Trait {
     pub fn to_rust_type(&self) -> TokenStream {
-        let flagged = self.flagged.is_some() && self.flagged.unwrap();
-        let rust_type = match self.storage {
-            StorageType::Vec => quote!(VecStorage<Self>),
-            StorageType::HashMap => quote!(HashMapStorage<Self>),
-            StorageType::DenseVec => quote!(DenseVecStorage<Self>),
-            StorageType::Null => quote!(NullStorage<Self>),
-            StorageType::DefaultVec => quote!(DefaultVecStorage<Self>),
-        };
-        if flagged {
-            quote!(FlaggedStorage<Self, #rust_type>)
+        if let Trait::Component { storage, flagged } = self {
+            let flagged = flagged.is_some() && flagged.unwrap();
+            let rust_type = match storage {
+                StorageType::Vec => quote!(VecStorage<Self>),
+                StorageType::HashMap => quote!(HashMapStorage<Self>),
+                StorageType::DenseVec => quote!(DenseVecStorage<Self>),
+                StorageType::Null => quote!(NullStorage<Self>),
+                StorageType::DefaultVec => quote!(DefaultVecStorage<Self>),
+            };
+            if flagged {
+                quote!(FlaggedStorage<Self, #rust_type>)
+            } else {
+                rust_type
+            }
         } else {
-            rust_type
+            quote!()
         }
     }
 }
@@ -126,7 +147,7 @@ pub struct Field {
 pub struct Config {
     pub name: String,
     pub hide: Option<bool>,
-    pub component: Option<Component>,
+    pub traits: Option<Vec<Trait>>,
     pub fields: Vec<Field>,
 }
 
@@ -393,12 +414,16 @@ impl Generator {
                 let vname = c.name.clone();
                 vnames.push(vname.clone());
                 let name = format_ident!("{}", c.name);
-                if let Some(component) = &c.component {
-                    files.push(mod_name.clone());
-                    names.push(name.clone());
-                    storages.push(component.to_rust_type());
-                    ns.push(c.get_dir_mask());
-                    cmds.push(Self::string_to_u32(vname.as_bytes()));
+                if let Some(traits) = &c.traits {
+                    for t in traits {
+                        if let Trait::Component { .. } = t {
+                            files.push(mod_name.clone());
+                            names.push(name.clone());
+                            storages.push(t.to_rust_type());
+                            ns.push(c.get_dir_mask());
+                            cmds.push(Self::string_to_u32(vname.as_bytes()));
+                        }
+                    }
                 } else {
                     inners.push(quote!(#mod_name::#name));
                 }

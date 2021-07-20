@@ -1,8 +1,7 @@
 #![feature(trait_alias)]
 #![feature(associated_type_bounds)]
 
-use std::{net::SocketAddr, ops::Deref};
-
+pub(crate) mod backend;
 pub(crate) mod component;
 pub(crate) mod dlog;
 pub(crate) mod dynamic;
@@ -12,20 +11,21 @@ pub(crate) mod sync;
 pub(crate) mod system;
 
 use crate::{
-    component::FullDataCommit,
     network::async_run,
     resource::TimeStatistic,
-    system::{GameSystem, PrintStatisticSystem, StatisticRunNow, StatisticSystem},
+    system::{GameSystem, StatisticRunNow, StatisticSystem},
 };
-use byteorder::{BigEndian, ByteOrder};
-use crossbeam::channel::Receiver;
-use protobuf::Message;
-use specs::{Dispatcher, DispatcherBuilder, Entity, RunNow, System, SystemData, World, WorldExt};
+
+use crate::{component::AroundFullData, resource::FrameCounter};
+use specs::{Dispatcher, DispatcherBuilder, RunNow, System, World, WorldExt};
 use std::{
+    net::SocketAddr,
+    ops::Deref,
     thread::sleep,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+pub use backend::{DropEntity, Input, Output, SceneSyncBackend};
 pub use codegen::{export, init_log, request, setup, system};
 pub use component::{
     Closing, HashComponent, NetToken, Position, SceneData, SceneMember, SelfSender, TeamMember,
@@ -33,6 +33,10 @@ pub use component::{
 pub use dlog::{init as init_logger, LogParam};
 pub use dynamic::{DynamicManager, DynamicSystem};
 pub use generator::{Generator, SyncDirection};
+#[cfg(target_os = "windows")]
+pub use libloading::os::windows::Symbol;
+#[cfg(not(target_os = "windows"))]
+pub use libloading::os::windows::Symbol;
 pub use network::{channel, BytesSender, RequestIdent};
 pub use resource::SceneManager;
 pub use sync::{ChangeSet, DataSet};
@@ -40,43 +44,6 @@ pub use system::{
     CleanStorageSystem, CloseSystem, CommitChangeSystem, GridSystem, HandshakeSystem, InputSystem,
     SceneSystem, TeamSystem,
 };
-
-use crate::{component::AroundFullData, resource::FrameCounter};
-#[cfg(target_os = "windows")]
-pub use libloading::os::windows::Symbol;
-#[cfg(not(target_os = "windows"))]
-pub use libloading::os::windows::Symbol;
-use specs::shred::DynamicSystemData;
-use std::marker::PhantomData;
-
-/// Trait for requests enum type, it's an aggregation of all requests
-pub trait Input {
-    /// decode data and send by channels
-    fn dispatch(&mut self, ident: RequestIdent, data: Vec<u8>);
-
-    fn next_receiver(&self) -> Receiver<Vec<Entity>>;
-
-    fn do_next(&mut self, entity: Entity);
-}
-
-pub trait CommandId<T> {
-    fn cmd(_t: &T) -> u32;
-}
-
-pub trait Output: Deref<Target: Message> {
-    fn encode(&self, id: u32) -> Vec<u8> {
-        let mut data = vec![0u8; 12];
-        self.write_to_vec(&mut data).unwrap();
-        let length = (data.len() - 4) as u32;
-        let cmd = Self::cmd();
-        let header = data.as_mut_slice();
-        BigEndian::write_u32(header, length);
-        BigEndian::write_u32(&mut header[4..], id);
-        BigEndian::write_u32(&mut header[8..], cmd);
-        data
-    }
-    fn cmd() -> u32;
-}
 
 /// 只读封装，如果某个变量从根本上不希望进行修改，则可以使用此模板类型
 pub struct ReadOnly<T> {
@@ -204,13 +171,12 @@ impl Engine {
         }
     }
 
-    pub fn run<I, S>(mut self, setup: S)
+    pub fn run<I, S>(self, setup: S)
     where
         I: Input + Send + Sync + 'static,
         S: Fn(&mut World, &mut GameDispatcherBuilder, &DynamicManager) -> I,
     {
-        let mut builder =
-            GameDispatcherBuilder::new(DispatcherBuilder::new(), self.builder.profile);
+        let mut builder = GameDispatcherBuilder::new(self.builder.profile);
         let mut world = World::new();
         let dm = DynamicManager::new(self.builder.library_path.clone());
         let request = setup(&mut world, &mut builder, &dm);
@@ -284,14 +250,21 @@ pub struct GameDispatcherBuilder<'a, 'b> {
 }
 
 impl<'a, 'b> GameDispatcherBuilder<'a, 'b> {
-    pub fn new(builder: DispatcherBuilder<'a, 'b>, statistic: bool) -> Self {
+    pub fn new(statistic: bool) -> Self {
+        Self {
+            builder: DispatcherBuilder::new(),
+            profile: statistic,
+        }
+    }
+
+    pub fn with_builder(builder: DispatcherBuilder<'a, 'b>, statistic: bool) -> Self {
         Self {
             builder,
             profile: statistic,
         }
     }
 
-    pub fn with<T>(mut self, system: T, name: &str, dep: &[&str]) -> Self
+    pub fn with<T>(self, system: T, name: &str, dep: &[&str]) -> Self
     where
         for<'c> T: GameSystem<'c> + System<'c> + Send + 'a,
     {
@@ -322,7 +295,7 @@ impl<'a, 'b> GameDispatcherBuilder<'a, 'b> {
         }
     }
 
-    pub fn with_thread_local<T>(mut self, name: &str, system: T) -> Self
+    pub fn with_thread_local<T>(self, name: &str, system: T) -> Self
     where
         T: for<'c> RunNow<'c> + 'b,
     {
@@ -357,7 +330,7 @@ impl<'a, 'b> GameDispatcherBuilder<'a, 'b> {
         self.builder.build()
     }
 
-    pub fn into(self) -> DispatcherBuilder<'a, 'b> {
+    pub fn into_raw(self) -> DispatcherBuilder<'a, 'b> {
         self.builder
     }
 }

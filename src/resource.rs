@@ -1,6 +1,6 @@
 use crate::{
-    component::{AroundFullData, FullDataCommit, Position, SceneData, SceneMember, TeamMember},
-    SyncDirection,
+    component::{AroundFullData, Position, SceneData, SceneMember, TeamMember},
+    SceneSyncBackend,
 };
 use specs::{
     prelude::ComponentEvent, storage::GenericWriteStorage, BitSet, Component, Entities, Entity,
@@ -10,7 +10,6 @@ use specs_hierarchy::{Hierarchy, HierarchyEvent, Parent};
 use std::{
     collections::HashMap,
     marker::PhantomData,
-    ops::Deref,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -86,25 +85,29 @@ impl FrameCounter {
     }
 }
 
-pub struct SceneManager<P, S> {
+pub struct SceneManager<B>
+where
+    B: SceneSyncBackend,
+    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked,
+    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked,
+{
     position_reader: ReaderId<ComponentEvent>,
     scene_reader: ReaderId<ComponentEvent>,
     hierarchy_reader: ReaderId<HierarchyEvent>,
-    _phantom: PhantomData<P>,
+    _phantom: PhantomData<B>,
     /// mapping from entity to grid index
     user_grids: HashMap<u32, (Entity, usize)>,
     /// mapping from scene to grids
     scene_grids: HashMap<u32, HashMap<usize, (usize, BitSet)>>,
-    scene_data: HashMap<u32, S>,
+    scene_data: HashMap<u32, B::SceneData>,
     scene_mapping: HashMap<u32, Entity>,
 }
 
-impl<P, S> SceneManager<P, S>
+impl<B> SceneManager<B>
 where
-    P: Component + Position,
-    P::Storage: Tracked,
-    S: Component + SceneData,
-    S::Storage: Tracked,
+    B: SceneSyncBackend,
+    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked,
+    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked,
 {
     pub fn new(
         position_reader: ReaderId<ComponentEvent>,
@@ -126,9 +129,9 @@ where
     pub(crate) fn maintain<'a>(
         &mut self,
         entities: Entities<'a>,
-        positions: ReadStorage<'a, P>,
+        positions: ReadStorage<'a, B::Position>,
         scene: ReadStorage<'a, SceneMember>,
-        scene_data: ReadStorage<'a, S>,
+        scene_data: ReadStorage<'a, B::SceneData>,
         scene_hierarchy: ReadExpect<'a, SceneHierarchy>,
         mut new_scene_member: WriteStorage<'a, AroundFullData>,
     ) {
@@ -181,7 +184,7 @@ where
             }
         }
 
-        for (entity, pos, scene, id) in (&entities, &positions, &scene, &inserted).join() {
+        for (entity, pos, scene, _) in (&entities, &positions, &scene, &inserted).join() {
             let parent = scene.parent_entity();
             if let Some(sd) = scene_data.get(parent) {
                 if let Some(index) = sd.grid_index(pos.x(), pos.y()) {
@@ -308,7 +311,7 @@ where
         self.user_grids.insert(entity.id(), (parent, index));
     }
 
-    pub fn get_scene_data(&self, entity: Entity) -> Option<&S> {
+    pub fn get_scene_data(&self, entity: Entity) -> Option<&B::SceneData> {
         self.scene_data.get(&entity.id())
     }
 

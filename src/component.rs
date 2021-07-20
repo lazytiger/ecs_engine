@@ -1,14 +1,14 @@
 #![allow(dead_code)]
-use crate::{BytesSender, Output, SyncDirection};
+use crate::{backend::Output, BytesSender, SyncDirection};
 use mio::Token;
 use specs::{
-    BitSet, Component, DenseVecStorage, Entity, FlaggedStorage, HashMapStorage, Join, NullStorage,
-    ReadStorage, VecStorage,
+    BitSet, Component, DenseVecStorage, Entity, FlaggedStorage, HashMapStorage, Join, ReadStorage,
+    VecStorage,
 };
 use specs_hierarchy::Parent;
 use std::{
     cmp::Ordering,
-    ops::{BitOrAssign, Deref, DerefMut},
+    ops::{Deref, DerefMut},
 };
 
 macro_rules! component {
@@ -133,15 +133,17 @@ pub trait SceneData: Clone {
     /// 场景id
     fn id(&self) -> u32;
     /// 场景坐标的最小xy值
-    fn get_min_xy(&self) -> (f32, f32);
+    fn get_min_x(&self) -> f32;
+    fn get_min_y(&self) -> f32;
     /// 获取场景的分块尺寸，即可以分为行列数
-    fn get_size(&self) -> (i32, i32);
+    fn get_column(&self) -> i32;
+    fn get_row(&self) -> i32;
     /// 场景分隔的正方形边长
     fn grid_size(&self) -> f32;
     /// 根据位置信息计算格子索引
     /// index = y * column + x
     fn grid_index(&self, x: f32, y: f32) -> Option<usize> {
-        let (min_x, min_y) = self.get_min_xy();
+        let (min_x, min_y) = (self.get_min_x(), self.get_min_y());
         if x < min_x || y < min_y {
             return None;
         }
@@ -150,7 +152,7 @@ pub trait SceneData: Clone {
         let grid_size = (self.grid_size() * 100.0) as i32;
         let x = x / grid_size;
         let y = y / grid_size;
-        let (row, column) = self.get_size();
+        let (row, column) = (self.get_row(), self.get_column());
         if x >= column || y >= row {
             return None;
         }
@@ -160,7 +162,7 @@ pub trait SceneData: Clone {
     fn around(&self, index: usize) -> Vec<usize> {
         let mut data = Vec::new();
         let index = index as i32;
-        let (row, column) = self.get_size();
+        let (row, column) = (self.get_row(), self.get_column());
         let x = index % column;
         let y = index / column;
         for i in [-1, 0, 1] {

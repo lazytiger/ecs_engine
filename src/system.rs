@@ -1,21 +1,19 @@
 use crate::{
-    component::{
-        AroundFullData, Closing, FullDataCommit, Position, SceneData, SceneMember, TeamMember,
-    },
+    backend::DummySceneSyncBackend,
+    component::{AroundFullData, Closing, SceneMember, TeamMember},
     dynamic::{get_library_name, Library},
     network::BytesSender,
     resource::{FrameCounter, SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
     sync::ChangeSet,
-    DataSet, DynamicManager, NetToken, SelfSender, SyncDirection,
+    DataSet, DynamicManager, NetToken, SceneSyncBackend, SelfSender, SyncDirection,
 };
 use crossbeam::channel::{Receiver, Sender};
 use mio::Token;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use protobuf::Mask;
 use specs::{
-    shred::{DynamicSystemData, SystemData},
-    BitSet, Component, Entities, Entity, Join, LazyUpdate, Read, ReadExpect, ReadStorage, RunNow,
-    System, Tracked, World, WorldExt, WriteExpect, WriteStorage,
+    shred::SystemData, BitSet, Component, Entities, Entity, Join, LazyUpdate, Read, ReadExpect,
+    ReadStorage, RunNow, System, Tracked, World, WorldExt, WriteExpect, WriteStorage,
 };
 use specs_hierarchy::{HierarchySystem, Parent};
 use std::{
@@ -186,13 +184,13 @@ impl<'a> RunNow<'a> for FsNotifySystem {
     fn setup(&mut self, _world: &mut World) {}
 }
 
-pub struct CommitChangeSystem<T, P, S> {
+pub struct CommitChangeSystem<T, B = DummySceneSyncBackend> {
     tick_step: usize,
     counter: usize,
-    _phantom: PhantomData<(T, P, S)>,
+    _phantom: PhantomData<(T, B)>,
 }
 
-impl<T, P, S> CommitChangeSystem<T, P, S> {
+impl<T, B> CommitChangeSystem<T, B> {
     pub fn new(tick_step: usize) -> Self {
         Self {
             tick_step,
@@ -202,21 +200,20 @@ impl<T, P, S> CommitChangeSystem<T, P, S> {
     }
 }
 
-impl<T, P, S> Default for CommitChangeSystem<T, P, S> {
+impl<T, B> Default for CommitChangeSystem<T, B> {
     fn default() -> Self {
         Self::new(1)
     }
 }
 
-impl<'a, T, P, S> System<'a> for CommitChangeSystem<T, P, S>
+impl<'a, T, B> System<'a> for CommitChangeSystem<T, B>
 where
     T: Component + ChangeSet + DataSet,
     <T as Deref>::Target: Mask,
     T: DerefMut,
-    P: Component + Position + Send + Sync + 'static,
-    P::Storage: Tracked,
-    S: Component + SceneData + Send + Sync + 'static,
-    S::Storage: Tracked,
+    B: SceneSyncBackend + Send + Sync + 'static,
+    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked,
+    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked,
 {
     type SystemData = (
         WriteStorage<'a, T>,
@@ -225,7 +222,7 @@ where
         ReadExpect<'a, TeamHierarchy>,
         Read<'a, BytesSender>,
         Entities<'a>,
-        ReadExpect<'a, SceneManager<P, S>>,
+        ReadExpect<'a, SceneManager<B>>,
         ReadStorage<'a, AroundFullData>,
     );
 
@@ -301,24 +298,23 @@ where
 pub type TeamSystem = HierarchySystem<TeamMember>;
 pub type SceneSystem = HierarchySystem<SceneMember>;
 
-pub struct GridSystem<P, S> {
-    _phantom: PhantomData<(P, S)>,
+pub struct GridSystem<B> {
+    _phantom: PhantomData<B>,
 }
 
-impl<'a, P, S> GridSystem<P, S>
+impl<'a, B> GridSystem<B>
 where
-    P: Component + Position + Send + Sync + 'static,
-    P::Storage: Tracked,
-    S: Component + SceneData + Send + Sync + 'static,
-    S::Storage: Tracked,
+    B: SceneSyncBackend + Send + Sync + 'static,
+    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked,
+    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked,
 {
     pub fn new(world: &mut World) -> Self {
-        if !world.has_value::<SceneManager<P, S>>() {
+        if !world.has_value::<SceneManager<B>>() {
             let gm = {
-                let mut p_storage = world.write_storage::<P>();
-                let mut s_storage = world.write_storage::<S>();
+                let mut p_storage = world.write_storage::<B::Position>();
+                let mut s_storage = world.write_storage::<B::SceneData>();
                 let mut hierarchy = world.write_resource::<SceneHierarchy>();
-                SceneManager::<P, S>::new(
+                SceneManager::<B>::new(
                     p_storage.register_reader(),
                     s_storage.register_reader(),
                     hierarchy.track(),
@@ -332,28 +328,27 @@ where
     }
 }
 
-impl<'a, P, S> System<'a> for GridSystem<P, S>
+impl<'a, B> System<'a> for GridSystem<B>
 where
-    P: Component + Position + Send + Sync + 'static,
-    P::Storage: Tracked,
-    S: Component + SceneData + Send + Sync + 'static,
-    S::Storage: Tracked,
+    B: SceneSyncBackend + Send + Sync + 'static,
+    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked,
+    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked,
 {
     type SystemData = (
         Entities<'a>,
-        ReadStorage<'a, P>,
+        ReadStorage<'a, B::Position>,
         ReadStorage<'a, SceneMember>,
-        ReadStorage<'a, S>,
-        WriteExpect<'a, SceneManager<P, S>>,
+        ReadStorage<'a, B::SceneData>,
+        WriteExpect<'a, SceneManager<B>>,
         ReadExpect<'a, SceneHierarchy>,
         WriteStorage<'a, AroundFullData>,
     );
 
     fn run(
         &mut self,
-        (entities, positions, scene, scene_data, mut gm, hierarchy, new_scene_member): Self::SystemData,
+        (entities, positions, scene, scene_data, mut sm, hierarchy, new_scene_member): Self::SystemData,
     ) {
-        gm.maintain(
+        sm.maintain(
             entities,
             positions,
             scene,
@@ -386,7 +381,7 @@ pub struct StatisticSystem<T>(pub String, pub T);
 
 impl<'a, T> System<'a> for StatisticSystem<T>
 where
-    T: System<'a> + GameSystem<'a>,
+    T: GameSystem<'a> + System<'a>,
 {
     type SystemData = (
         ReadExpect<'a, TimeStatistic>,
