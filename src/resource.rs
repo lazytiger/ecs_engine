@@ -1,7 +1,7 @@
 use crate::{
     backend::DropEntity,
     component::{AroundFullData, Position, SceneData, SceneMember, TeamMember},
-    BytesSender, NetToken, SceneSyncBackend,
+    events_to_bitsets, BytesSender, NetToken, SceneSyncBackend,
 };
 use specs::{
     hibitset::BitSetLike, prelude::ComponentEvent, storage::GenericWriteStorage, BitSet, Component,
@@ -98,7 +98,6 @@ where
 {
     position_reader: ReaderId<ComponentEvent>,
     scene_reader: ReaderId<ComponentEvent>,
-    hierarchy_reader: ReaderId<HierarchyEvent>,
     _phantom: PhantomData<B>,
     /// mapping from entity to grid index
     user_grids: HashMap<u32, (Entity, usize)>,
@@ -117,12 +116,10 @@ where
     pub fn new(
         position_reader: ReaderId<ComponentEvent>,
         scene_reader: ReaderId<ComponentEvent>,
-        hierarchy_reader: ReaderId<HierarchyEvent>,
     ) -> Self {
         Self {
             position_reader,
             scene_reader,
-            hierarchy_reader,
             _phantom: Default::default(),
             user_grids: Default::default(),
             scene_grids: Default::default(),
@@ -155,8 +152,9 @@ where
     ) {
         let afdc = storage.get_mut_or_default(entity).unwrap();
         afdc.add_mask(&set);
+        let id = entity.id();
         for (entity, _) in (entities, &set).join() {
-            storage.get_mut_or_default(entity).unwrap().add(entity.id());
+            storage.get_mut_or_default(entity).unwrap().add(id);
         }
     }
 
@@ -169,56 +167,25 @@ where
         mut new_scene_member: WriteStorage<'a, AroundFullData>,
         tokens: ReadStorage<'a, NetToken>,
         sender: Read<'a, BytesSender>,
-        counter: Read<'a, FrameCounter>,
     ) {
         let mut modified = BitSet::default();
         let mut inserted = BitSet::default();
         let mut removed = BitSet::default();
         let events = scene_data.channel().read(&mut self.scene_reader);
-        for event in events {
-            match event {
-                ComponentEvent::Inserted(id) => {
-                    log::info!("scene:{} inserted", id);
-                    inserted.add(*id);
-                }
-                ComponentEvent::Modified(id) => {
-                    log::info!("scene:{} modified", id);
-                }
-                ComponentEvent::Removed(id) => {
-                    log::info!("scene:{} removed", id);
-                    self.scene_data.remove(id);
-                    self.scene_mapping.remove(id);
-                }
-            }
+        events_to_bitsets(events, &mut inserted, &mut modified, &mut removed);
+        for id in &removed {
+            self.scene_data.remove(&id);
+            self.scene_mapping.remove(&id);
         }
         for (data, id) in (&scene_data, &inserted).join() {
             self.scene_data.insert(id, data.clone());
         }
         inserted.clear();
         removed.clear();
+        modified.clear();
 
         let events = positions.channel().read(&mut self.position_reader);
-        for event in events {
-            match event {
-                ComponentEvent::Modified(id) => {
-                    if !inserted.contains(*id) {
-                        log::info!("[frame:{}]position:{} modified", counter.frame(), id);
-                        modified.add(*id);
-                    }
-                }
-                ComponentEvent::Inserted(id) => {
-                    log::info!("position:{} inserted", id);
-                    inserted.add(*id);
-                    removed.remove(*id);
-                }
-                ComponentEvent::Removed(id) => {
-                    log::info!("position:{} removed", id);
-                    removed.add(*id);
-                    inserted.remove(*id);
-                    modified.remove(*id);
-                }
-            }
-        }
+        events_to_bitsets(events, &mut inserted, &mut modified, &mut removed);
 
         for id in &removed {
             let around = self.get_user_around(id);

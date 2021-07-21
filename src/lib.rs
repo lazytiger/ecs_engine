@@ -17,7 +17,7 @@ use crate::{
 };
 
 use crate::{component::AroundFullData, resource::FrameCounter};
-use specs::{Dispatcher, DispatcherBuilder, RunNow, System, World, WorldExt};
+use specs::{BitSet, Dispatcher, DispatcherBuilder, RunNow, System, World, WorldExt};
 use std::{
     net::SocketAddr,
     ops::Deref,
@@ -39,6 +39,7 @@ pub use libloading::os::windows::Symbol;
 pub use libloading::os::windows::Symbol;
 pub use network::{channel, BytesSender, RequestIdent};
 pub use resource::SceneManager;
+use specs::storage::ComponentEvent;
 pub use sync::DataSet;
 pub use system::{
     CleanStorageSystem, CloseSystem, CommitChangeSystem, GridSystem, HandshakeSystem, InputSystem,
@@ -326,5 +327,31 @@ impl<'a, 'b> GameDispatcherBuilder<'a, 'b> {
 
     pub fn into_raw(self) -> DispatcherBuilder<'a, 'b> {
         self.builder
+    }
+}
+
+pub fn events_to_bitsets<'a>(
+    events: impl Iterator<Item = &'a ComponentEvent>,
+    inserted: &mut BitSet,
+    modified: &mut BitSet,
+    removed: &mut BitSet,
+) {
+    for event in events {
+        match event {
+            ComponentEvent::Inserted(id) => {
+                inserted.add(*id);
+                removed.remove(*id);
+            }
+            ComponentEvent::Modified(id) => {
+                if !inserted.contains(*id) {
+                    modified.add(*id);
+                }
+            }
+            ComponentEvent::Removed(id) => {
+                removed.add(*id);
+                inserted.remove(*id);
+                modified.remove(*id);
+            }
+        }
     }
 }

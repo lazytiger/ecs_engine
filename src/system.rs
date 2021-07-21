@@ -2,6 +2,7 @@ use crate::{
     backend::DummySceneSyncBackend,
     component::{AroundFullData, Closing, SceneMember, TeamMember},
     dynamic::{get_library_name, Library},
+    events_to_bitsets,
     network::BytesSender,
     resource::{FrameCounter, SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
     DataSet, DynamicManager, NetToken, SceneSyncBackend, SelfSender, SyncDirection,
@@ -11,9 +12,9 @@ use mio::Token;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use protobuf::Mask;
 use specs::{
-    prelude::ComponentEvent, shred::SystemData, BitSet, Component, Entities, Entity, Join,
-    LazyUpdate, Read, ReadExpect, ReadStorage, ReaderId, RunNow, System, Tracked, World, WorldExt,
-    WriteExpect, WriteStorage,
+    hibitset::BitSetLike, prelude::ComponentEvent, shred::SystemData, BitSet, Component, Entities,
+    Entity, Join, LazyUpdate, Read, ReadExpect, ReadStorage, ReaderId, RunNow, System, Tracked,
+    World, WorldExt, WriteExpect, WriteStorage,
 };
 use specs_hierarchy::{HierarchySystem, Parent};
 use std::{
@@ -228,11 +229,21 @@ where
         &mut self,
         (data, token, teams, hteams, sender, entities, gm, new_scene_member): Self::SystemData,
     ) {
+        //log::info!("CommitChangeSystem:{}", std::any::type_name::<T>());
         // 处理有新玩家进入时需要完整数据集的情况
         if T::is_direction_enabled(SyncDirection::Around) {
             for (data, member, entity) in (&data, &new_scene_member, &entities).join() {
+                if member.mask().is_empty() {
+                    continue;
+                }
+                log::info!(
+                    "entity:{} {} should send full data",
+                    entity.id(),
+                    std::any::type_name::<T>()
+                );
                 let mut data = data.clone();
                 data.mask_all();
+                data.commit();
                 if let Some(bytes) = data.encode(entity.id(), SyncDirection::Around) {
                     let tokens = NetToken::tokens(&token, member.mask());
                     sender.broadcast_bytes(tokens, bytes)
@@ -246,24 +257,7 @@ where
         let mut modified = BitSet::new();
         let mut removed = BitSet::new();
         let events = data.channel().read(&mut self.reader);
-        for event in events {
-            match event {
-                ComponentEvent::Inserted(id) => {
-                    inserted.add(*id);
-                    removed.remove(*id);
-                }
-                ComponentEvent::Modified(id) => {
-                    if !inserted.contains(*id) {
-                        modified.add(*id);
-                    }
-                }
-                ComponentEvent::Removed(id) => {
-                    removed.add(*id);
-                    inserted.remove(*id);
-                    modified.remove(*id);
-                }
-            }
-        }
+        events_to_bitsets(events, &mut inserted, &mut modified, &mut removed);
 
         // 处理针对玩家的数据集
         let mut not_modified = BitSet::new();
@@ -273,6 +267,7 @@ where
                 let data: &mut T = unsafe { std::mem::transmute(data) };
                 data.commit();
             } else {
+                log::info!("entity:{} {} not changed", id, std::any::type_name::<T>());
                 not_modified.add(id);
             }
         }
@@ -335,12 +330,7 @@ where
             let gm = {
                 let mut p_storage = world.write_storage::<B::Position>();
                 let mut s_storage = world.write_storage::<B::SceneData>();
-                let mut hierarchy = world.write_resource::<SceneHierarchy>();
-                SceneManager::<B>::new(
-                    p_storage.register_reader(),
-                    s_storage.register_reader(),
-                    hierarchy.track(),
-                )
+                SceneManager::<B>::new(p_storage.register_reader(), s_storage.register_reader())
             };
             world.insert(gm);
         }
@@ -365,7 +355,6 @@ where
         WriteStorage<'a, AroundFullData>,
         ReadStorage<'a, NetToken>,
         Read<'a, BytesSender>,
-        Read<'a, FrameCounter>,
     );
 
     fn run(
@@ -379,9 +368,9 @@ where
             new_scene_member,
             tokens,
             sender,
-            counter,
         ): Self::SystemData,
     ) {
+        //log::info!("GridSystem");
         sm.maintain(
             entities,
             positions,
@@ -390,7 +379,6 @@ where
             new_scene_member,
             tokens,
             sender,
-            counter,
         );
     }
 }
@@ -484,6 +472,7 @@ where
     type SystemData = (Entities<'a>, WriteStorage<'a, T>);
 
     fn run(&mut self, (entities, mut data): Self::SystemData) {
+        //log::info!("CleanStorageSystem:{}", std::any::type_name::<T>());
         let entities = (&entities, data.drain())
             .join()
             .map(|(entity, _)| entity)
