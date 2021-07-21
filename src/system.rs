@@ -168,10 +168,7 @@ impl<'a> RunNow<'a> for FsNotifySystem {
                 if let Some(lname) = get_library_name(path) {
                     log::warn!("library {} updated", lname);
                     let lib = dm.get(&lname);
-                    let lib: &mut Library = unsafe {
-                        #[allow(mutable_transmutes)]
-                        std::mem::transmute(lib.as_ref())
-                    };
+                    let lib = unsafe { &mut *(lib.as_ref() as *const Library as *mut Library) };
                     lib.reload();
                 }
             }
@@ -263,8 +260,7 @@ where
         let mut not_modified = BitSet::new();
         for (data, id) in (&data, &modified).join() {
             if data.is_data_dirty() {
-                #[allow(mutable_transmutes)]
-                let data: &mut T = unsafe { std::mem::transmute(data) };
+                let data = unsafe { &mut *(data as *const T as *mut T) };
                 data.commit();
             } else {
                 log::info!("entity:{} {} not changed", id, std::any::type_name::<T>());
@@ -275,8 +271,7 @@ where
 
         if T::is_direction_enabled(SyncDirection::Client) {
             for (data, id, token) in (&data, &modified, &token).join() {
-                #[allow(mutable_transmutes)]
-                let data: &mut T = unsafe { std::mem::transmute(data) };
+                let data = unsafe { &mut *(data as *const T as *mut T) };
                 let bytes = data.encode(id, SyncDirection::Client);
                 if let Some(bytes) = bytes {
                     sender.send_bytes(token.token(), bytes);
@@ -287,8 +282,7 @@ where
         // 处理针对组队的数据集
         if T::is_direction_enabled(SyncDirection::Team) {
             for (data, id, team) in (&data, &modified, &teams).join() {
-                #[allow(mutable_transmutes)]
-                let data: &mut T = unsafe { std::mem::transmute(data) };
+                let data = unsafe { &mut *(data as *const T as *mut T) };
                 if let Some(bytes) = data.encode(id, SyncDirection::Team) {
                     let members = hteams.all_children(team.parent_entity());
                     let tokens = NetToken::tokens(&token, &members);
@@ -300,8 +294,7 @@ where
         // 处理针对场景的数据集
         if T::is_direction_enabled(SyncDirection::Around) {
             for (data, id, entity, _) in (&data, &modified, &entities, !&new_scene_member).join() {
-                #[allow(mutable_transmutes)]
-                let data: &mut T = unsafe { std::mem::transmute(data) };
+                let data = unsafe { &mut *(data as *const T as *mut T) };
                 if let Some(bytes) = data.encode(id, SyncDirection::Around) {
                     let around = gm.get_user_around(entity.id());
                     let tokens = NetToken::tokens(&token, &around);
