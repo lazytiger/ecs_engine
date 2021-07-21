@@ -431,7 +431,6 @@ impl Generator {
         let mut storages = Vec::new();
         let mut inners = Vec::new();
         let mut cs_codes = Vec::new();
-        let mut indexes = Vec::new();
         let mut ns = Vec::new();
         let mut cmds = Vec::new();
         let mut vnames = Vec::new();
@@ -545,7 +544,6 @@ impl Generator {
                 } else {
                     inners.push(quote!(#mod_name::#name));
                 }
-                indexes.push(indexes.len() + 2);
                 let mut client_mask = 0u64;
                 let mut around_mask = 0u64;
                 let mut database_mask = 0u64;
@@ -624,14 +622,14 @@ impl Generator {
 
             use specs::{
                 Component, DefaultVecStorage, FlaggedStorage, HashMapStorage, NullStorage,
-                VecStorage,  Tracked,
+                VecStorage,  Tracked, WorldExt, World,
             };
             use std::{
                 any::Any,
                 ops::{Deref, DerefMut},
             };
             use protobuf::{Message, MaskSet, Mask};
-            use ecs_engine::{ChangeSet, SyncDirection, DataSet, CommitChangeSystem, GameDispatcherBuilder, SceneSyncBackend};
+            use ecs_engine::{SyncDirection, DataSet, CommitChangeSystem, GameDispatcherBuilder, SceneSyncBackend};
             use byteorder::{BigEndian, ByteOrder};
             #(pub use #inners;)*
 
@@ -789,11 +787,6 @@ impl Generator {
                     type Storage = #storages;
                 }
 
-                impl ChangeSet for Type<#files::#names, #ns, #cmds> {
-                    fn index() -> usize {
-                        #indexes
-                    }
-                }
                 pub type #names = Type<#files::#names, #ns, #cmds>;
             )*
 
@@ -806,14 +799,14 @@ impl Generator {
             #position_code
             #scene_data_code
 
-            pub fn setup<B>(builder:&mut GameDispatcherBuilder)
+            pub fn setup<B>(world:&mut World, builder:&mut GameDispatcherBuilder)
             where
                 B: SceneSyncBackend + Send + Sync + 'static,
                 <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked + Default,
                 <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked + Default,
             {
                 #(
-                    builder.add(CommitChangeSystem::<#names, B>::default(), #vnames, &[]);
+                    builder.add(CommitChangeSystem::<#names, B>::new(world), #vnames, &[]);
                 )*
             }
         )
@@ -946,7 +939,7 @@ impl Generator {
         self.gen_io_config(
             "request",
             self.request_dir.clone(),
-            |configs, mods, names, files, inners, cmds| {
+            |_configs, mods, names, files, inners, cmds| {
                 let vnames: Vec<_> = names
                     .iter()
                     .map(|name| format_ident!("{}", name.to_string().to_case(Case::Snake)))

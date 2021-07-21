@@ -220,6 +220,7 @@ where
                 }
             }
         }
+        inserted &= &!&modified;
 
         for (entity, removed) in (&entities, &removed).join() {
             let around = self.get_user_around(entity);

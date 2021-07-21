@@ -1,7 +1,7 @@
 #![feature(macro_attributes_in_derive_output)]
 #![deny(unsafe_code)]
 #![allow(dead_code)]
-use ecs_engine::{export, system, ChangeSet, DynamicManager, GameDispatcherBuilder};
+use ecs_engine::{export, system, DynamicManager, GameDispatcherBuilder};
 use specs::{
     world::Index, BitSet, Component, DenseVecStorage, HashMapStorage, Join, LazyUpdate, VecStorage,
     World, WorldExt,
@@ -33,18 +33,6 @@ pub struct GuildMember {
 #[storage(HashMapStorage)]
 pub struct UserInput {
     name: String,
-}
-
-impl ChangeSet for BagInfo {
-    fn index() -> usize {
-        todo!()
-    }
-}
-
-impl ChangeSet for UserInfo {
-    fn index() -> usize {
-        todo!()
-    }
 }
 
 #[system]

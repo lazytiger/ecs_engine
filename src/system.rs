@@ -4,7 +4,6 @@ use crate::{
     dynamic::{get_library_name, Library},
     network::BytesSender,
     resource::{FrameCounter, SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
-    sync::ChangeSet,
     DataSet, DynamicManager, NetToken, SceneSyncBackend, SelfSender, SyncDirection,
 };
 use crossbeam::channel::{Receiver, Sender};
@@ -12,8 +11,9 @@ use mio::Token;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use protobuf::Mask;
 use specs::{
-    shred::SystemData, BitSet, Component, Entities, Entity, Join, LazyUpdate, Read, ReadExpect,
-    ReadStorage, RunNow, System, Tracked, World, WorldExt, WriteExpect, WriteStorage,
+    prelude::ComponentEvent, shred::SystemData, BitSet, Component, Entities, Entity, Join,
+    LazyUpdate, Read, ReadExpect, ReadStorage, ReaderId, RunNow, System, Tracked, World, WorldExt,
+    WriteExpect, WriteStorage,
 };
 use specs_hierarchy::{HierarchySystem, Parent};
 use std::{
@@ -185,30 +185,31 @@ impl<'a> RunNow<'a> for FsNotifySystem {
 }
 
 pub struct CommitChangeSystem<T, B = DummySceneSyncBackend> {
-    tick_step: usize,
-    counter: usize,
+    reader: ReaderId<ComponentEvent>,
     _phantom: PhantomData<(T, B)>,
 }
 
-impl<T, B> CommitChangeSystem<T, B> {
-    pub fn new(tick_step: usize) -> Self {
+impl<T, B> CommitChangeSystem<T, B>
+where
+    T: Component + Send + Sync + 'static,
+    <T as Component>::Storage: Tracked + Default,
+{
+    pub fn new(world: &mut World) -> Self {
+        if !world.has_value::<T>() {
+            world.register::<T>();
+        }
+        let reader = world.write_storage::<T>().register_reader();
         Self {
-            tick_step,
-            counter: 0,
+            reader,
             _phantom: Default::default(),
         }
     }
 }
 
-impl<T, B> Default for CommitChangeSystem<T, B> {
-    fn default() -> Self {
-        Self::new(1)
-    }
-}
-
 impl<'a, T, B> System<'a> for CommitChangeSystem<T, B>
 where
-    T: Component + ChangeSet + DataSet,
+    T: Component + DataSet,
+    <T as Component>::Storage: Tracked,
     <T as Deref>::Target: Mask,
     T: DerefMut,
     B: SceneSyncBackend + Send + Sync + 'static,
@@ -230,13 +231,6 @@ where
         &mut self,
         (mut data, token, teams, hteams, sender, entities, gm, new_scene_member): Self::SystemData,
     ) {
-        self.counter += 1;
-        if self.counter != self.tick_step {
-            return;
-        } else {
-            self.counter = 0;
-        }
-
         // 处理有新玩家进入时需要完整数据集的情况
         if T::is_direction_enabled(SyncDirection::Around) {
             for (data, member, entity) in (&data, &new_scene_member, &entities).join() {
@@ -251,18 +245,35 @@ where
             }
         }
 
-        if !T::is_storage_dirty() {
-            return;
+        let mut inserted = BitSet::new();
+        let mut modified = BitSet::new();
+        let mut removed = BitSet::new();
+        let events = data.channel().read(&mut self.reader);
+        for event in events {
+            match event {
+                ComponentEvent::Inserted(id) => {
+                    inserted.add(*id);
+                }
+                ComponentEvent::Modified(id) => {
+                    modified.add(*id);
+                }
+                ComponentEvent::Removed(id) => {
+                    removed.add(*id);
+                }
+            }
         }
 
         // 处理针对玩家的数据集
-        let mut modified = BitSet::new();
-        for (data, entity) in (&mut data, &entities).join() {
+        let mut not_modified = BitSet::new();
+        for (data, id) in (&mut data, &modified).join() {
             if data.is_data_dirty() {
                 data.commit();
+            } else {
+                not_modified.add(id);
             }
-            modified.add(entity.id());
         }
+        modified &= &!&not_modified;
+        modified |= &inserted;
 
         if T::is_direction_enabled(SyncDirection::Client) {
             for (data, id, token) in (&mut data, &modified, &token).join() {
@@ -296,8 +307,6 @@ where
                 }
             }
         }
-
-        T::clear_storage_dirty();
     }
 }
 

@@ -545,7 +545,6 @@ impl Config {
             SystemType::Single => {
                 let run_code = quote! {
                     (#(#join_names,)*).join().for_each(|(#(#foreach_names,)*)| {
-                        looped = true;
                         #func_call
                     });
                     #(#output_enames.into_iter().for_each(|(entity, c)|{
@@ -575,11 +574,7 @@ impl Config {
 
                         fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
                             #(let mut #output_enames = Vec::new();)*
-                            let mut looped = false;
                             #run_code
-                            if looped {
-                                #(#write_components::set_storage_dirty();)*
-                            }
                         }
                     }
                 }
@@ -960,11 +955,6 @@ lazy_static::lazy_static! {
 
 fn add_system(name: String) {
     SYSTEMS.lock().unwrap().push(name);
-}
-
-fn is_input_type(ty: &Type) -> bool {
-    let type_name = type_to_string(ty);
-    is_input_string(&type_name)
 }
 
 fn is_input_string(type_name: &String) -> bool {

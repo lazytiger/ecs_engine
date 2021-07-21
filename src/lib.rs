@@ -39,7 +39,7 @@ pub use libloading::os::windows::Symbol;
 pub use libloading::os::windows::Symbol;
 pub use network::{channel, BytesSender, RequestIdent};
 pub use resource::SceneManager;
-pub use sync::{ChangeSet, DataSet};
+pub use sync::DataSet;
 pub use system::{
     CleanStorageSystem, CloseSystem, CommitChangeSystem, GridSystem, HandshakeSystem, InputSystem,
     SceneSystem, TeamSystem,
@@ -205,7 +205,6 @@ impl Engine {
             }
         }
         builder.add(CloseSystem, "close", &[]);
-        builder.add_barrier();
         builder.add(
             CleanStorageSystem::<AroundFullData>::default(),
             "around_full_data_clean",
