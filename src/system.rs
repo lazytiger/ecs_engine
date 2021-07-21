@@ -195,9 +195,6 @@ where
     <T as Component>::Storage: Tracked + Default,
 {
     pub fn new(world: &mut World) -> Self {
-        if !world.has_value::<T>() {
-            world.register::<T>();
-        }
         let reader = world.write_storage::<T>().register_reader();
         Self {
             reader,
@@ -229,7 +226,7 @@ where
 
     fn run(
         &mut self,
-        (mut data, token, teams, hteams, sender, entities, gm, new_scene_member): Self::SystemData,
+        (data, token, teams, hteams, sender, entities, gm, new_scene_member): Self::SystemData,
     ) {
         // 处理有新玩家进入时需要完整数据集的情况
         if T::is_direction_enabled(SyncDirection::Around) {
@@ -253,30 +250,38 @@ where
             match event {
                 ComponentEvent::Inserted(id) => {
                     inserted.add(*id);
+                    removed.remove(*id);
                 }
                 ComponentEvent::Modified(id) => {
-                    modified.add(*id);
+                    if !inserted.contains(*id) {
+                        modified.add(*id);
+                    }
                 }
                 ComponentEvent::Removed(id) => {
                     removed.add(*id);
+                    inserted.remove(*id);
+                    modified.remove(*id);
                 }
             }
         }
 
         // 处理针对玩家的数据集
         let mut not_modified = BitSet::new();
-        for (data, id) in (&mut data, &modified).join() {
+        for (data, id) in (&data, &modified).join() {
             if data.is_data_dirty() {
+                #[allow(mutable_transmutes)]
+                let data: &mut T = unsafe { std::mem::transmute(data) };
                 data.commit();
             } else {
                 not_modified.add(id);
             }
         }
         modified &= &!&not_modified;
-        modified |= &inserted;
 
         if T::is_direction_enabled(SyncDirection::Client) {
-            for (data, id, token) in (&mut data, &modified, &token).join() {
+            for (data, id, token) in (&data, &modified, &token).join() {
+                #[allow(mutable_transmutes)]
+                let data: &mut T = unsafe { std::mem::transmute(data) };
                 let bytes = data.encode(id, SyncDirection::Client);
                 if let Some(bytes) = bytes {
                     sender.send_bytes(token.token(), bytes);
@@ -286,7 +291,9 @@ where
 
         // 处理针对组队的数据集
         if T::is_direction_enabled(SyncDirection::Team) {
-            for (data, id, team) in (&mut data, &modified, &teams).join() {
+            for (data, id, team) in (&data, &modified, &teams).join() {
+                #[allow(mutable_transmutes)]
+                let data: &mut T = unsafe { std::mem::transmute(data) };
                 if let Some(bytes) = data.encode(id, SyncDirection::Team) {
                     let members = hteams.all_children(team.parent_entity());
                     let tokens = NetToken::tokens(&token, &members);
@@ -297,11 +304,11 @@ where
 
         // 处理针对场景的数据集
         if T::is_direction_enabled(SyncDirection::Around) {
-            for (data, id, entity, _) in
-                (&mut data, &modified, &entities, !&new_scene_member).join()
-            {
+            for (data, id, entity, _) in (&data, &modified, &entities, !&new_scene_member).join() {
+                #[allow(mutable_transmutes)]
+                let data: &mut T = unsafe { std::mem::transmute(data) };
                 if let Some(bytes) = data.encode(id, SyncDirection::Around) {
-                    let around = gm.get_user_around(entity);
+                    let around = gm.get_user_around(entity.id());
                     let tokens = NetToken::tokens(&token, &around);
                     sender.broadcast_bytes(tokens, bytes)
                 }
@@ -355,10 +362,10 @@ where
         ReadStorage<'a, SceneMember>,
         ReadStorage<'a, B::SceneData>,
         WriteExpect<'a, SceneManager<B>>,
-        ReadExpect<'a, SceneHierarchy>,
         WriteStorage<'a, AroundFullData>,
         ReadStorage<'a, NetToken>,
         Read<'a, BytesSender>,
+        Read<'a, FrameCounter>,
     );
 
     fn run(
@@ -369,10 +376,10 @@ where
             scene,
             scene_data,
             mut sm,
-            hierarchy,
             new_scene_member,
             tokens,
             sender,
+            counter,
         ): Self::SystemData,
     ) {
         sm.maintain(
@@ -380,10 +387,10 @@ where
             positions,
             scene,
             scene_data,
-            hierarchy,
             new_scene_member,
             tokens,
             sender,
+            counter,
         );
     }
 }

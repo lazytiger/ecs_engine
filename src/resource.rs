@@ -10,6 +10,7 @@ use specs::{
 use specs_hierarchy::{Hierarchy, HierarchyEvent, Parent};
 use std::{
     collections::HashMap,
+    fmt::Write,
     marker::PhantomData,
     sync::Mutex,
     time::{Duration, Instant},
@@ -31,17 +32,20 @@ impl TimeStatistic {
     }
 
     pub fn print(&self, frame: usize, fps: usize) {
+        let mut buffer = bytes::BytesMut::new();
+        write!(buffer, "frame:{}, fps:{},", frame, fps).unwrap();
         let times = self.times.lock().unwrap();
         for (name, (begin, end)) in times.iter() {
-            log::info!(
-                "frame:{}, fps:{}, system {} begin at {:?}, cost:{}",
-                frame,
-                fps,
+            write!(
+                buffer,
+                " system {} begin at {:?}, cost:{},",
                 name,
                 begin,
                 end.as_micros() - begin.as_micros()
-            );
+            )
+            .unwrap();
         }
+        log::info!("{}", String::from_utf8(buffer.to_vec()).unwrap());
     }
 
     pub fn clear(&self) {
@@ -99,7 +103,7 @@ where
     /// mapping from entity to grid index
     user_grids: HashMap<u32, (Entity, usize)>,
     /// mapping from scene to grids
-    scene_grids: HashMap<u32, HashMap<usize, (usize, BitSet)>>,
+    scene_grids: HashMap<u32, HashMap<usize, BitSet>>,
     scene_data: HashMap<u32, B::SceneData>,
     scene_mapping: HashMap<u32, Entity>,
 }
@@ -128,7 +132,7 @@ where
     }
 
     fn drop_entities<'a>(
-        entity: Entity,
+        entity: u32,
         set: BitSet,
         storage: &ReadStorage<'a, NetToken>,
         sender: &BytesSender,
@@ -139,14 +143,8 @@ where
 
         let tokens = NetToken::tokens(storage, &set);
         let mut drop_entity = B::DropEntity::default();
-        drop_entity.add(entity.id());
-        sender.broadcast_data(tokens, entity.id(), drop_entity);
-
-        if let Some(token) = storage.get(entity) {
-            let mut drop_entity = B::DropEntity::default();
-            drop_entity.add_set(set.iter());
-            sender.send_data(token.token(), entity.id(), drop_entity);
-        }
+        drop_entity.add(entity);
+        sender.broadcast_data(tokens, entity, drop_entity);
     }
 
     fn add_full_data_commit<'a>(
@@ -168,12 +166,11 @@ where
         positions: ReadStorage<'a, B::Position>,
         scene: ReadStorage<'a, SceneMember>,
         scene_data: ReadStorage<'a, B::SceneData>,
-        scene_hierarchy: ReadExpect<'a, SceneHierarchy>,
         mut new_scene_member: WriteStorage<'a, AroundFullData>,
         tokens: ReadStorage<'a, NetToken>,
         sender: Read<'a, BytesSender>,
+        counter: Read<'a, FrameCounter>,
     ) {
-        let begin = Instant::now();
         let mut modified = BitSet::default();
         let mut inserted = BitSet::default();
         let mut removed = BitSet::default();
@@ -181,10 +178,14 @@ where
         for event in events {
             match event {
                 ComponentEvent::Inserted(id) => {
+                    log::info!("scene:{} inserted", id);
                     inserted.add(*id);
                 }
-                ComponentEvent::Modified(_) => {}
+                ComponentEvent::Modified(id) => {
+                    log::info!("scene:{} modified", id);
+                }
                 ComponentEvent::Removed(id) => {
+                    log::info!("scene:{} removed", id);
                     self.scene_data.remove(id);
                     self.scene_mapping.remove(id);
                 }
@@ -196,36 +197,34 @@ where
         inserted.clear();
         removed.clear();
 
-        let events = scene_hierarchy.changed().read(&mut self.hierarchy_reader);
-        for event in events {
-            match event {
-                HierarchyEvent::Removed(entity) => {
-                    removed.add(entity.id());
-                }
-                _ => {}
-            }
-        }
-
         let events = positions.channel().read(&mut self.position_reader);
         for event in events {
             match event {
                 ComponentEvent::Modified(id) => {
-                    modified.add(*id);
+                    if !inserted.contains(*id) {
+                        log::info!("[frame:{}]position:{} modified", counter.frame(), id);
+                        modified.add(*id);
+                    }
                 }
                 ComponentEvent::Inserted(id) => {
+                    log::info!("position:{} inserted", id);
                     inserted.add(*id);
+                    removed.remove(*id);
                 }
                 ComponentEvent::Removed(id) => {
+                    log::info!("position:{} removed", id);
                     removed.add(*id);
+                    inserted.remove(*id);
+                    modified.remove(*id);
                 }
             }
         }
-        inserted &= &!&modified;
 
-        for (entity, removed) in (&entities, &removed).join() {
-            let around = self.get_user_around(entity);
-            Self::drop_entities(entity, around, &tokens, &sender);
-            self.remove_grid_entity(removed);
+        for id in &removed {
+            let around = self.get_user_around(id);
+            Self::drop_entities(id, around, &tokens, &sender);
+            self.remove_grid_entity(id);
+            log::info!("entity:{} removed from scene", id);
         }
 
         for (entity, pos, scene, _id) in (&entities, &positions, &scene, &inserted).join() {
@@ -233,13 +232,7 @@ where
             if let Some(sd) = scene_data.get(parent) {
                 if let Some(index) = sd.grid_index(pos.x(), pos.y()) {
                     self.insert_grid_entity(parent, entity, index);
-                    log::info!(
-                        "entity:{} insert into scene:{} grid {}",
-                        entity.id(),
-                        parent.id(),
-                        index
-                    );
-                    let around = self.get_user_around(entity);
+                    let around = self.get_user_around(entity.id());
                     Self::add_full_data_commit(entity, around, &mut new_scene_member, &entities);
                 } else {
                     log::error!(
@@ -265,12 +258,6 @@ where
                         if index == new_index {
                             continue;
                         }
-                        log::info!(
-                            "entity:{} enter scene:{} grid:{}",
-                            entity.id(),
-                            parent.id(),
-                            new_index
-                        );
                         let (removed, _, inserted) = sd.diff(index, new_index);
                         let inserted = self.get_user_grids(&entity, inserted);
                         Self::add_full_data_commit(
@@ -281,8 +268,7 @@ where
                         );
 
                         let removed = self.get_user_grids(&entity, removed);
-                        Self::drop_entities(entity, removed, &tokens, &sender);
-                        self.remove_grid_entity(id);
+                        Self::drop_entities(entity.id(), removed, &tokens, &sender);
                         self.insert_grid_entity(parent, entity, new_index);
                     } else {
                         log::error!(
@@ -304,18 +290,21 @@ where
             .scene_grids
             .iter()
             .filter_map(|(entity, grids)| {
-                if 0 == grids.iter().fold(0, |count, (_, (size, _))| count + size) {
-                    Some(*entity)
-                } else {
+                if grids.iter().any(|(_, grid)| !grid.is_empty()) {
                     None
+                } else {
+                    Some(*entity)
                 }
             })
             .collect();
-        empty_scene.iter().for_each(|entity| {
-            log::info!("scene:{} deleted", entity);
-            let entity = entities.entity(*entity);
-            if let Err(err) = entities.delete(entity) {
-                log::error!("delete entity:{} failed:{}", entity.id(), err);
+        empty_scene.iter().for_each(|id| {
+            log::info!("scene:{} deleted", id);
+            let entity = entities.entity(*id);
+            if entities.is_alive(entity) {
+                if let Err(err) = entities.delete(entity) {
+                    log::error!("delete entity:{} failed:{}", entity.id(), err);
+                }
+                self.scene_grids.remove(id);
             }
         });
 
@@ -323,6 +312,7 @@ where
     }
 
     fn insert_grid_entity(&mut self, parent: Entity, entity: Entity, index: usize) {
+        self.remove_grid_entity(entity.id());
         if !self.scene_grids.contains_key(&parent.id()) {
             self.scene_grids.insert(parent.id(), Default::default());
         }
@@ -330,13 +320,17 @@ where
         if !grids.contains_key(&index) {
             grids.insert(index, Default::default());
         }
-        let (count, grid) = grids.get_mut(&index).unwrap();
+        let grid = grids.get_mut(&index).unwrap();
         if grid.add(entity.id()) {
             log::error!("entity:{} already in grid", entity.id());
-        } else {
-            *count += 1;
         }
         self.user_grids.insert(entity.id(), (parent, index));
+        log::info!(
+            "entity:{} insert into scene:{} grid:{}",
+            entity.id(),
+            parent.id(),
+            index
+        );
     }
 
     pub fn get_scene_data(&self, entity: Entity) -> Option<&B::SceneData> {
@@ -344,14 +338,11 @@ where
     }
 
     fn remove_grid_entity(&mut self, id: u32) {
-        log::info!("entity:{} removed from manager", id);
         if let Some((parent, index)) = self.user_grids.remove(&id) {
             if let Some(scene_grid) = self.scene_grids.get_mut(&parent.id()) {
-                if let Some((count, grid)) = scene_grid.get_mut(&index) {
+                if let Some(grid) = scene_grid.get_mut(&index) {
                     if !grid.remove(id) {
                         log::warn!("entity {} not found in set", id);
-                    } else {
-                        *count -= 1;
                     }
                 }
             }
@@ -363,7 +354,7 @@ where
         if let Some(sd) = self.scene_data.get(&parent.id()) {
             if let Some(grids) = self.scene_grids.get(&parent.id()) {
                 for index in sd.around(index) {
-                    if let Some((_, grid)) = grids.get(&index) {
+                    if let Some(grid) = grids.get(&index) {
                         set |= grid;
                     }
                 }
@@ -377,7 +368,7 @@ where
         if let Some((parent, _)) = self.user_grids.get(&entity.id()) {
             if let Some(grids) = self.scene_grids.get(&parent.id()) {
                 for index in indexes {
-                    if let Some((_, grid)) = grids.get(&index) {
+                    if let Some(grid) = grids.get(&index) {
                         set |= grid;
                     }
                 }
@@ -387,10 +378,10 @@ where
         set
     }
 
-    pub fn get_user_around(&self, entity: Entity) -> BitSet {
-        if let Some((parent, index)) = self.user_grids.get(&entity.id()) {
+    pub fn get_user_around(&self, entity: u32) -> BitSet {
+        if let Some((parent, index)) = self.user_grids.get(&entity) {
             let mut bitset = self.get_scene_around(parent, *index);
-            bitset.remove(entity.id());
+            bitset.remove(entity);
             bitset
         } else {
             BitSet::new()

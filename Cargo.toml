@@ -20,15 +20,12 @@ mio = { version = "0.7", features = ["net", "os-poll"] }
 slab = "0.4"
 rayon = "1.5"
 protobuf = { path = "../protobuf/protobuf" }
-
-
-
 crossbeam = "0.8"
 byteorder = "1.4"
-
 cfg-if = "1.0"
 notify = "4.0"
 specs-hierarchy = "0.6"
+bytes = "1.0"
 
 [features]
 debug = []
