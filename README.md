@@ -130,56 +130,9 @@
   #[system]
   fn single_target(input:&SingleInput, user:&UserInfo, bag:&BagInfo){}
   ```
+* 其他复杂需求   
+这类需求可以参考EnterSceneSystem的实现，再复杂一些的就只能直接写System了
   
-* 玩家与另外一个玩家请求
-这类请求也相对容易，只需要取到两个人相关的component来作为参数即可，与单人目标类似
-  ```rust
-  #[system]
-  fn double_target(input:&DoubleInput, (source_user, target_user):(&UserInfo, &UserInfo), (source_bag, target_bag):(&BagInfo, &BagInfo)){}
-  ```
-  当然，上面的形式太啰嗦，实际上声明的时候，我们可以直接写成如下
-  ```rust
-  #[system(double)]
-  fn single_target(#[double(player)] input:&DoubleInput, user:&UserInfo, bag:&BagInfo){} 
-  ```
-  最终宏系统会自动推导成上面的形式
-  
-* 玩家与另外一类实体请求
-这类请求，一般来说需要进行特殊分析，目前能够想到的一种方式是这样的, 比如单人需要操作公会对象
-  ```rust
-  #[system(multi)]
-  fn multi_target(user:&UserInfo, #[multi(users)] guild:&GuildInfo){}
-  ```
-    还有一类是MMO相关场景操作，比如
-    ```rust
-    #[system(multi)]
-    fn multi_target(user:&UserInfo, pos:&mut Position, scene:&mut Scene){}
-    ```
-    这种类型其实也可以自动生成模板代码，利用par_join让所有的场景在单独线程并行执行，大致如下：
-    ```rust
-    impl<'a> System<'a> for EnterSceneSystem {
-        type SystemData = (
-            ReadStorage<'a, DiffType<Fake<1>, 1>>,
-            WriteStorage<'a, DiffType<Fake<2>, 2>>,
-            WriteStorage<'a, Scene>,
-        );
-    
-        fn run(&mut self, (f1, mut f2, mut scene): Self::SystemData) {
-            (&scene, ).par_join().for_each(|(scene, )| {
-                for (f1, f2, _) in (&f1, &f2, &scene.players).join() {
-                    unsafe {
-                        #[allow(mutable_transmutes)]
-                            test_scene(f1, std::mem::transmute(f2), std::mem::transmute(scene));
-                    }
-                }
-            });
-        }
-    }
-    ```
-  
-* 玩家与另外一组实体
-  这种形式已经不是业务逻辑的范畴了，所以我们不在这里进行讨论，可以直接使用ecs底层代码来进行实现
-
 ## 动态链接库管理
 * Rust的动态链接库可以通过将crate-type设置成cdylib来生成，需要注意的是，这种情况下，引用的其他外部库都是静态链接的形式被
   写入了当前库，除非是纯C类型的函数指针并且声明了extern。所以对于纯粹的rust类型来说，各个动态链接库project之间也是可以互相引用的，

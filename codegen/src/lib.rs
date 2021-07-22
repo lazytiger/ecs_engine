@@ -28,12 +28,6 @@ enum Error {
     WriteStorageFoundInComponents,
     #[error("ReadStorage should not intersect with mutable Component")]
     ReadStorageFoundInMutableComponents,
-    #[error("system types must be one of `single`, `double` or `multiple`")]
-    UnexpectedSystemType(Span),
-    #[error("duplicate system name")]
-    DuplicateSystemName,
-    #[error("duplicate system type")]
-    DuplicateSystemType,
     #[error("invalid key")]
     InvalidKey(Span),
     #[error("invalid meta found in dynamic")]
@@ -54,8 +48,6 @@ enum Error {
     MultipleInputFound,
     #[error("#[dynamic(\"lib\", \"func\")] is not allowed, use #[dynamic(lib = \"lib\", func = \"func\")] instead")]
     LiteralFoundInDynamicAttribute(Span),
-    #[error("invalid literal as identifier")]
-    InvalidLiteralFoundForName(Span),
     #[error("Entity type cannot be mutable, remove &mut")]
     EntityCantBeMutable(Span),
     #[error("GameReadStorage type cannot be mutable, remove &mut")]
@@ -73,13 +65,15 @@ enum Error {
 impl Error {
     fn span(&self) -> Span {
         match self {
-            Error::UnexpectedSystemType(span) => *span,
             Error::InvalidKey(span) => *span,
-            Error::InvalidArgument(span) => *span,
             Error::InvalidMetaForDynamic(span) => *span,
-            Error::InvalidLiteralFoundForName(span) => *span,
+            Error::InvalidArgument(span) => *span,
+            Error::LiteralFoundInDynamicAttribute(span) => *span,
             Error::EntityCantBeMutable(span) => *span,
+            Error::ReadStorageCantBeMutable(span) => *span,
+            Error::WriteStorageIsNotMutable(span) => *span,
             Error::InvalidReturnType(span) => *span,
+            Error::InvalidStorageType(span) => *span,
             _ => Span::call_site(),
         }
     }
@@ -90,72 +84,26 @@ impl Error {
     }
 }
 
-#[derive(Copy, Clone, PartialEq)]
-enum SystemType {
-    Single,
-    Double,
-    Multiple,
-}
-
 #[derive(Default)]
 struct SystemAttr {
-    system_name: Option<Lit>,
-    system_type: Option<SystemType>,
+    system_name: Option<Ident>,
 }
 
 impl SystemAttr {
-    fn new(system_name: Option<Lit>, system_type: Option<SystemType>) -> Self {
-        Self {
-            system_type,
-            system_name,
-        }
+    fn new(system_name: Option<Ident>) -> Self {
+        Self { system_name }
     }
 
     fn parse_meta(meta: &Meta) -> Result<Self, Error> {
         let result = match meta {
             Meta::Path(path) => {
-                let ident = path.get_ident().expect("expected system type");
-                if ident == "single" {
-                    Self::new(None, Some(SystemType::Single))
-                } else if ident == "double" {
-                    Self::new(None, Some(SystemType::Double))
-                } else if ident == "multiple" {
-                    Self::new(None, Some(SystemType::Multiple))
+                if let Some(ident) = path.get_ident() {
+                    Self::new(Some(ident.clone()))
                 } else {
-                    return Err(Error::UnexpectedSystemType(ident.span()));
+                    Self::new(None)
                 }
             }
-            Meta::List(items) => {
-                let mut n = None;
-                let mut s = None;
-                for item in &items.nested {
-                    let Self {
-                        system_name,
-                        system_type,
-                    } = match item {
-                        syn::NestedMeta::Meta(meta) => Self::parse_meta(&meta)?,
-                        syn::NestedMeta::Lit(_) => {
-                            return Err(Error::LiteralFoundInDynamicAttribute(meta.span()))
-                        }
-                    };
-                    if let Some(system_name) = system_name {
-                        if n.replace(system_name).is_some() {
-                            return Err(Error::DuplicateSystemName);
-                        }
-                    }
-                    if let Some(system_type) = system_type {
-                        if s.replace(system_type).is_some() {
-                            return Err(Error::DuplicateSystemType);
-                        }
-                    }
-                }
-                Self::new(n, s)
-            }
-            Meta::NameValue(name_value) => match name_value.path.get_ident() {
-                Some(ident) if ident == "name" => Self::new(Some(name_value.lit.clone()), None),
-                Some(ident) => return Err(Error::InvalidKey(ident.span())),
-                _ => return Err(Error::InvalidKey(Span::call_site())),
-            },
+            _ => Self::new(None),
         };
         Ok(result)
     }
@@ -167,15 +115,6 @@ struct Config {
     lib_name: Option<Lit>,
     func_name: Option<Lit>,
     signature: Sig,
-}
-
-fn lit_to_ident(lit: &Lit) -> Result<Ident, Error> {
-    let (name, span) = match lit {
-        Lit::Str(name) => (name.value(), name.span()),
-        Lit::Char(name) => (name.value().to_string(), name.span()),
-        _ => return Err(Error::InvalidLiteralFoundForName(lit.span())),
-    };
-    Ok(Ident::new(&name, span))
 }
 
 fn contains_duplicate(data: &Vec<Type>) -> bool {
@@ -345,7 +284,7 @@ impl Config {
         self.validate()?;
 
         let system_name = if let Some(system_name) = &self.attr.system_name {
-            lit_to_ident(system_name)?
+            system_name.clone()
         } else {
             format_ident!(
                 "{}System",
@@ -646,54 +585,44 @@ impl Config {
                 }
         };
 
-        let system_type = if let Some(system_type) = self.attr.system_type {
-            system_type
-        } else {
-            SystemType::Single
-        };
-
-        let system_code = match system_type {
-            SystemType::Single => {
-                let run_code = quote! {
-                    (#(#join_names,)*).join().for_each(|(#(#foreach_names,)*)| {
-                        #func_call
-                    });
-                    #(#output_enames.into_iter().for_each(|(entity, c)|{
-                        if let Err(err) = #output_snames.insert(entity, c) {
-                            log::error!("insert component failed:{}", err);
-                        }
-                    });)*
-                };
-                let run_code = if self.dynamic {
-                    quote! {
-                       if let Some(symbol) = self.lib.get_symbol(&dm) {
-                            #(#input_alias)*
-                            #run_code
-                       } else {
-                            log::error!("symbol not found for system {}", #func_name);
-                        }
+        let system_code = {
+            let run_code = quote! {
+                (#(#join_names,)*).join().for_each(|(#(#foreach_names,)*)| {
+                    #func_call
+                });
+                #(#output_enames.into_iter().for_each(|(entity, c)|{
+                    if let Err(err) = #output_snames.insert(entity, c) {
+                        log::error!("insert component failed:{}", err);
                     }
-                } else {
-                    quote! {
+                });)*
+            };
+            let run_code = if self.dynamic {
+                quote! {
+                   if let Some(symbol) = self.lib.get_symbol(&dm) {
                         #(#input_alias)*
                         #run_code
+                   } else {
+                        log::error!("symbol not found for system {}", #func_name);
                     }
-                };
+                }
+            } else {
                 quote! {
-                    impl<'a> ::specs::System<'a> for #system_name {
-                        type SystemData = (
-                            #(#system_data_types,)*
-                        );
+                    #(#input_alias)*
+                    #run_code
+                }
+            };
+            quote! {
+                impl<'a> ::specs::System<'a> for #system_name {
+                    type SystemData = (
+                        #(#system_data_types,)*
+                    );
 
-                        fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
-                            #(let mut #output_enames = Vec::new();)*
-                            #run_code
-                        }
+                    fn run(&mut self, (#(#input_names,)*): Self::SystemData) {
+                        #(let mut #output_enames = Vec::new();)*
+                        #run_code
                     }
                 }
             }
-            SystemType::Double => quote!(),
-            SystemType::Multiple => quote!(),
         };
 
         let func_code = if self.dynamic {
