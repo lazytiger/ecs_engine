@@ -4,7 +4,7 @@ use crate::{
     dynamic::{get_library_name, Library},
     events_to_bitsets,
     network::BytesSender,
-    resource::{FrameCounter, SceneHierarchy, SceneManager, TeamHierarchy, TimeStatistic},
+    resource::{FrameCounter, SceneManager, TeamHierarchy, TimeStatistic},
     DataSet, DynamicManager, NetToken, SceneSyncBackend, SelfSender, SyncDirection,
 };
 use crossbeam::channel::{Receiver, Sender};
@@ -138,6 +138,7 @@ pub struct FsNotifySystem {
 }
 
 impl FsNotifySystem {
+    #[allow(dead_code)]
     pub fn new(path: String, recursive: bool) -> FsNotifySystem {
         let (sender, receiver) = std::sync::mpsc::channel();
         let mut watcher =

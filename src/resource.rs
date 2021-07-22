@@ -7,7 +7,7 @@ use specs::{
     hibitset::BitSetLike, prelude::ComponentEvent, storage::GenericWriteStorage, BitSet, Component,
     Entities, Entity, Join, Read, ReadStorage, ReaderId, Tracked, WriteStorage,
 };
-use specs_hierarchy::{Hierarchy, HierarchyEvent, Parent};
+use specs_hierarchy::{Hierarchy, Parent};
 use std::{
     collections::HashMap,
     fmt::Write,
@@ -366,4 +366,5 @@ where
     }
 }
 pub type TeamHierarchy = Hierarchy<TeamMember>;
+#[allow(dead_code)]
 pub type SceneHierarchy = Hierarchy<SceneMember>;
