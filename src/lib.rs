@@ -46,7 +46,7 @@ use specs::storage::ComponentEvent;
 pub use sync::DataSet;
 pub use system::{
     CleanStorageSystem, CloseSystem, CommitChangeSystem, GridSystem, HandshakeSystem, InputSystem,
-    SceneSystem, TeamSystem,
+    SceneSystem, TeamManagerSystem, TeamSystem,
 };
 pub type GameEntities = Entities<'static>;
 pub type GameReadStorage<T> = ReadStorage<'static, T>;

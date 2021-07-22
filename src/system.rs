@@ -1,6 +1,6 @@
 use crate::{
-    backend::DummySceneSyncBackend,
-    component::{AroundFullData, Closing, SceneMember, TeamMember},
+    backend::{DropEntity, DummySceneSyncBackend},
+    component::{AroundFullData, Closing, SceneMember, TeamFullData, TeamMember},
     dynamic::{get_library_name, Library},
     events_to_bitsets,
     network::BytesSender,
@@ -12,12 +12,13 @@ use mio::Token;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use protobuf::Mask;
 use specs::{
-    hibitset::BitSetLike, prelude::ComponentEvent, shred::SystemData, BitSet, Component, Entities,
-    Entity, Join, LazyUpdate, Read, ReadExpect, ReadStorage, ReaderId, RunNow, System, Tracked,
-    World, WorldExt, WriteExpect, WriteStorage,
+    hibitset::BitSetLike, prelude::ComponentEvent, shred::SystemData, storage::GenericWriteStorage,
+    BitSet, Component, Entities, Entity, Join, LazyUpdate, Read, ReadExpect, ReadStorage, ReaderId,
+    RunNow, System, Tracked, World, WorldExt, WriteExpect, WriteStorage,
 };
 use specs_hierarchy::{HierarchySystem, Parent};
 use std::{
+    collections::HashMap,
     fmt::Debug,
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -221,11 +222,12 @@ where
         Entities<'a>,
         ReadExpect<'a, SceneManager<B>>,
         ReadStorage<'a, AroundFullData>,
+        ReadStorage<'a, TeamFullData>,
     );
 
     fn run(
         &mut self,
-        (data, token, teams, hteams, sender, entities, gm, new_scene_member): Self::SystemData,
+        (data, token, teams, hteams, sender, entities, gm, new_scene_member, new_team_member): Self::SystemData,
     ) {
         //log::info!("CommitChangeSystem:{}", std::any::type_name::<T>());
         // 处理有新玩家进入时需要完整数据集的情况
@@ -243,6 +245,28 @@ where
                 data.mask_all();
                 data.commit();
                 if let Some(bytes) = data.encode(entity.id(), SyncDirection::Around) {
+                    let tokens = NetToken::tokens(&token, member.mask());
+                    sender.broadcast_bytes(tokens, bytes)
+                } else {
+                    log::warn!("full data synchronization required, but nothing to send");
+                }
+            }
+        }
+
+        if T::is_direction_enabled(SyncDirection::Team) {
+            for (data, member, entity) in (&data, &new_team_member, &entities).join() {
+                if member.mask().is_empty() {
+                    continue;
+                }
+                log::info!(
+                    "entity:{} {} should send full data",
+                    entity.id(),
+                    std::any::type_name::<T>()
+                );
+                let mut data = data.clone();
+                data.mask_all();
+                data.commit();
+                if let Some(bytes) = data.encode(entity.id(), SyncDirection::Team) {
                     let tokens = NetToken::tokens(&token, member.mask());
                     sender.broadcast_bytes(tokens, bytes)
                 } else {
@@ -271,7 +295,7 @@ where
         modified &= &!&not_modified;
 
         if T::is_direction_enabled(SyncDirection::Client) {
-            for (data, id, token) in (&data, &modified, &token).join() {
+            for (data, id, token) in (&data, &(&modified | &inserted), &token).join() {
                 let data = unsafe { &mut *(data as *const T as *mut T) };
                 let bytes = data.encode(id, SyncDirection::Client);
                 if let Some(bytes) = bytes {
@@ -303,17 +327,82 @@ where
                 }
             }
         }
+
+        if T::is_direction_enabled(SyncDirection::Database) {
+            //TODO
+        }
     }
 }
 
 pub type TeamSystem = HierarchySystem<TeamMember>;
 pub type SceneSystem = HierarchySystem<SceneMember>;
 
+pub struct TeamManagerSystem<B> {
+    reader: ReaderId<ComponentEvent>,
+    mapping: HashMap<u32, Entity>,
+    _phantom: PhantomData<B>,
+}
+
+impl<B> TeamManagerSystem<B> {
+    pub fn new(world: &mut World) -> Self {
+        let mut storage = world.write_storage::<TeamMember>();
+        let reader = storage.register_reader();
+        Self {
+            reader,
+            mapping: Default::default(),
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<'a, B> System<'a> for TeamManagerSystem<B>
+where
+    B: SceneSyncBackend + Send + Sync + 'static,
+    <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked + Default,
+    <<B as SceneSyncBackend>::SceneData as Component>::Storage: Tracked + Default,
+{
+    type SystemData = (
+        Entities<'a>,
+        ReadStorage<'a, TeamMember>,
+        ReadExpect<'a, TeamHierarchy>,
+        WriteStorage<'a, TeamFullData>,
+        ReadStorage<'a, NetToken>,
+        ReadExpect<'a, BytesSender>,
+    );
+
+    fn run(&mut self, (entities, tm, th, mut tfd, tokens, sender): Self::SystemData) {
+        let events = tm.channel().read(&mut self.reader);
+        let mut inserted = BitSet::new();
+        let mut modified = BitSet::new();
+        let mut removed = BitSet::new();
+        events_to_bitsets(events, &mut inserted, &mut modified, &mut removed);
+        for (entity, tm, _) in (&entities, &tm, &inserted).join() {
+            self.mapping.insert(entity.id(), tm.parent_entity());
+            let mut members = th.all_children(tm.parent_entity());
+            members.remove(entity.id());
+            tfd.get_mut_or_default(entity).unwrap().add_mask(&members);
+            let id = entity.id();
+            for (entity, _) in (&entities, &members).join() {
+                tfd.get_mut_or_default(entity).unwrap().add(id);
+            }
+        }
+        for id in removed {
+            if let Some(parent) = self.mapping.remove(&id) {
+                let members = th.all_children(parent);
+                let mut drop_entity = B::DropEntity::default();
+                drop_entity.add_set(&members);
+                let tokens = NetToken::tokens(&tokens, &members);
+                sender.broadcast_data(tokens, 0, drop_entity);
+            }
+        }
+    }
+}
+
 pub struct GridSystem<B> {
     _phantom: PhantomData<B>,
 }
 
-impl<'a, B> GridSystem<B>
+impl<B> GridSystem<B>
 where
     B: SceneSyncBackend + Send + Sync + 'static,
     <<B as SceneSyncBackend>::Position as Component>::Storage: Tracked + Default,
