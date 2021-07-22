@@ -448,7 +448,11 @@ impl Config {
                         fn_input_types.push(quote!(&mut #ty));
                         write_components.push(ty);
                     } else {
-                        join_names.push(quote!(&#jname));
+                        if self.signature.storage_args.contains(&ty) {
+                            join_names.push(quote!(#jname));
+                        } else {
+                            join_names.push(quote!(&#jname));
+                        }
                         fn_input_types.push(quote!(&#ty));
                         let data = quote!(::specs::ReadStorage<'a, #ty>);
                         system_data_types.push(data);
@@ -514,6 +518,7 @@ impl Config {
                     func_names.push(quote!(&#vname));
                 }
                 Parameter::Entities => {
+                    let vname = format_ident!("entity");
                     let jname = format_ident!("jentity");
                     if !self.signature.parameters.iter().any(|param| {
                         if let Parameter::Entity = param {
@@ -522,6 +527,10 @@ impl Config {
                             false
                         }
                     }) {
+                        if !self.signature.outputs.is_empty() {
+                            foreach_names.push(vname.clone());
+                            join_names.push(quote!(#jname));
+                        }
                         system_data_types.push(quote!(::specs::Entities<'a>));
                         input_names.push(quote!(#jname));
                     }
