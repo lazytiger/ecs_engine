@@ -17,7 +17,10 @@ use crate::{
 };
 
 use crate::{component::AroundFullData, resource::FrameCounter};
-use specs::{BitSet, Dispatcher, DispatcherBuilder, RunNow, System, World, WorldExt};
+use specs::{
+    BitSet, Dispatcher, DispatcherBuilder, Entities, ReadStorage, RunNow, System, World, WorldExt,
+    WriteStorage,
+};
 use std::{
     net::SocketAddr,
     ops::Deref,
@@ -45,6 +48,9 @@ pub use system::{
     CleanStorageSystem, CloseSystem, CommitChangeSystem, GridSystem, HandshakeSystem, InputSystem,
     SceneSystem, TeamSystem,
 };
+pub type GameEntities = Entities<'static>;
+pub type GameReadStorage<T> = ReadStorage<'static, T>;
+pub type GameWriteStorage<T> = WriteStorage<'static, T>;
 
 /// 只读封装，如果某个变量从根本上不希望进行修改，则可以使用此模板类型
 pub struct ReadOnly<T> {

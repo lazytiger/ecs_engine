@@ -1,15 +1,16 @@
 use proc_macro::TokenStream;
+use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 use convert_case::{Case, Casing};
-use generator::Generator;
 use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
-use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 use syn::{
     parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, GenericArgument, ItemFn,
     Lit, LitBool, LitStr, Meta, Pat, PathArguments, ReturnType, Signature, Type, TypePath,
     Visibility,
 };
+
+use generator::Generator;
 
 #[derive(thiserror::Error, Debug)]
 enum Error {
@@ -21,6 +22,12 @@ enum Error {
     DuplicateResourceType,
     #[error("duplicate state type found")]
     DuplicateStateType,
+    #[error("duplicate storage type found")]
+    DuplicateStorageType,
+    #[error("WriteStorage should not intersect Component")]
+    WriteStorageFoundInComponents,
+    #[error("ReadStorage should not intersect with mutable Component")]
+    ReadStorageFoundInMutableComponents,
     #[error("system types must be one of `single`, `double` or `multiple`")]
     UnexpectedSystemType(Span),
     #[error("duplicate system name")]
@@ -51,10 +58,16 @@ enum Error {
     InvalidLiteralFoundForName(Span),
     #[error("Entity type cannot be mutable, remove &mut")]
     EntityCantBeMutable(Span),
+    #[error("GameReadStorage type cannot be mutable, remove &mut")]
+    ReadStorageCantBeMutable(Span),
+    #[error("GameWriteStorage type must be mutable, add &mut")]
+    WriteStorageIsNotMutable(Span),
     #[error(
         "invalid return type only Option<Component> or tuple of Option<Component> is accepted"
     )]
     InvalidReturnType(Span),
+    #[error("invalid storage type, use GameReadStorage<T> or GameWriteStorage<T>")]
+    InvalidStorageType(Span),
 }
 
 impl Error {
@@ -293,13 +306,37 @@ impl Config {
         if contains_duplicate(&self.signature.state_args) {
             return Err(Error::DuplicateStateType);
         }
+        if contains_duplicate(&self.signature.storage_args) {
+            return Err(Error::DuplicateStorageType);
+        }
         let mut components = self.signature.component_args.clone();
-        self.signature
-            .outputs
-            .iter()
-            .for_each(|ty| components.push(ty.clone()));
+        components.extend(self.signature.outputs.clone().into_iter());
         if contains_duplicate(&components) {
             return Err(Error::DuplicateComponentType);
+        }
+        let mut components = self.signature.component_args.clone();
+        components.extend(self.signature.parameters.iter().filter_map(|param| {
+            if let Parameter::Storage(_, index, mutable) = param {
+                if *mutable {
+                    return Some(self.signature.storage_args[*index].clone());
+                }
+            }
+            None
+        }));
+        if contains_duplicate(&components) {
+            return Err(Error::WriteStorageFoundInComponents);
+        }
+        let mut components = self.signature.storage_args.clone();
+        components.extend(self.signature.parameters.iter().filter_map(|param| {
+            if let Parameter::Component(_, index, mutable) = param {
+                if *mutable {
+                    return Some(self.signature.component_args[*index].clone());
+                }
+            }
+            None
+        }));
+        if contains_duplicate(&components) {
+            return Err(Error::ReadStorageFoundInMutableComponents);
         }
         Ok(())
     }
@@ -392,6 +429,8 @@ impl Config {
         let mut foreach_names = Vec::new();
         // names for storing input entities.
         let mut write_components = Vec::new();
+        // alias names for storage types.
+        let mut input_alias = Vec::new();
 
         for param in &self.signature.parameters {
             match param {
@@ -454,14 +493,77 @@ impl Config {
                         fn_input_types.push(quote!(&#ty));
                     }
                 }
-                Parameter::Entity(vname) => {
+                Parameter::Entity => {
+                    let vname = format_ident!("entity");
                     let jname = format_ident!("j{}", vname);
-                    join_names.push(quote!(&#jname));
                     input_names.push(quote!(#jname));
                     fn_input_types.push(quote!(&::specs::Entity));
                     system_data_types.push(quote!(::specs::Entities<'a>));
                     foreach_names.push(vname.clone());
+                    if self.signature.parameters.iter().any(|param| {
+                        if let Parameter::Entities = param {
+                            true
+                        } else {
+                            false
+                        }
+                    }) {
+                        join_names.push(quote!(#jname));
+                    } else {
+                        join_names.push(quote!(&#jname));
+                    }
                     func_names.push(quote!(&#vname));
+                }
+                Parameter::Entities => {
+                    let jname = format_ident!("jentity");
+                    if !self.signature.parameters.iter().any(|param| {
+                        if let Parameter::Entity = param {
+                            true
+                        } else {
+                            false
+                        }
+                    }) {
+                        system_data_types.push(quote!(::specs::Entities<'a>));
+                        input_names.push(quote!(#jname));
+                    }
+                    fn_input_types.push(quote!(&::ecs_engine::GameEntities));
+                    input_alias.push(quote!(let #jname:&::ecs_engine::GameEntities = unsafe {std::mem::transmute(&#jname)};));
+                    func_names.push(quote!(#jname));
+                }
+                Parameter::Storage(vname, index, mutable) => {
+                    let sname = format_ident!("s{}", vname);
+                    let ty = self.signature.storage_args[*index].clone();
+                    let storage_type = if *mutable {
+                        quote!(&mut ::ecs_engine::GameWriteStorage<#ty>)
+                    } else {
+                        quote!(& ::ecs_engine::GameReadStorage<#ty>)
+                    };
+                    fn_input_types.push(quote!(#storage_type));
+                    if let Some(name) = self.signature.parameters.iter().find_map(|param| {
+                        if let Parameter::Component(name, index, _) = param {
+                            if self.signature.component_args[*index] == ty {
+                                Some(format_ident!("j{}", name))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }) {
+                        input_alias.push(
+                            quote!(let #name:#storage_type = unsafe { std::mem::transmute(&#name)};),
+                        );
+                        func_names.push(quote!(#name));
+                    } else {
+                        component_types.push(ty.clone());
+                        if *mutable {
+                            system_data_types.push(quote!(::specs::WriteStorage<'a, #ty>));
+                        } else {
+                            system_data_types.push(quote!(::specs::ReadStorage<'a, #ty>));
+                        }
+                        input_names.push(quote!(#sname));
+                        input_alias.push(quote!(let #sname:#storage_type = unsafe { std::mem::transmute(&#sname)};));
+                        func_names.push(quote!(#sname));
+                    }
                 }
             }
         }
@@ -480,7 +582,7 @@ impl Config {
             write_components.push(typ.clone());
         }
 
-        if !self.signature.outputs.is_empty() && !self.signature.has_entity() {
+        if !self.signature.outputs.is_empty() && !self.signature.has_entities() {
             system_data_types.push(quote!(::specs::Entities<'a>));
             let vname = format_ident!("entity");
             let jname = format_ident!("j{}", vname);
@@ -556,6 +658,7 @@ impl Config {
                 let run_code = if self.dynamic {
                     quote! {
                        if let Some(symbol) = self.lib.get_symbol(&dm) {
+                            #(#input_alias)*
                             #run_code
                        } else {
                             log::error!("symbol not found for system {}", #func_name);
@@ -563,6 +666,7 @@ impl Config {
                     }
                 } else {
                     quote! {
+                        #(#input_alias)*
                         #run_code
                     }
                 };
@@ -600,14 +704,15 @@ impl Config {
 enum ArgAttr {
     Resource(bool),
     State,
-    Component,
 }
 
 enum Parameter {
     Component(Ident, usize, bool),
     Resource(Ident, usize, bool, bool),
     State(Ident, usize, bool),
-    Entity(Ident),
+    Storage(Ident, usize, bool),
+    Entity,
+    Entities,
 }
 
 struct Sig {
@@ -615,15 +720,17 @@ struct Sig {
     parameters: Vec<Parameter>,
     state_args: Vec<Type>,
     resource_args: Vec<Type>,
+    storage_args: Vec<Type>,
     component_args: Vec<Type>,
     outputs: Vec<Type>,
     output_names: Vec<Ident>,
 }
 
 impl Sig {
-    fn has_entity(&self) -> bool {
+    fn has_entities(&self) -> bool {
         self.parameters.iter().any(|param| match param {
-            Parameter::Entity(_) => true,
+            Parameter::Entity => true,
+            Parameter::Entities => true,
             _ => false,
         })
     }
@@ -631,6 +738,7 @@ impl Sig {
     fn parse(item: &mut Signature) -> Result<Self, Error> {
         let mut parameters = Vec::new();
         let mut resource_args = Vec::new();
+        let mut storage_args = Vec::new();
         let mut state_args = Vec::new();
         let mut component_args = Vec::new();
         let mut index = 0usize;
@@ -664,20 +772,42 @@ impl Sig {
                                     state_args.push(elem.clone())
                                 }
                                 _ => {
-                                    if is_entity(elem) {
+                                    if is_storage(elem) {
+                                        if mutable && is_read_storage(elem) {
+                                            return Err(Error::ReadStorageCantBeMutable(
+                                                arg.span(),
+                                            ));
+                                        }
+                                        if !mutable && is_write_storage(elem) {
+                                            return Err(Error::WriteStorageIsNotMutable(
+                                                arg.span(),
+                                            ));
+                                        }
+                                        let ctype = get_storage_type(elem)?;
+                                        parameters.push(Parameter::Storage(
+                                            name,
+                                            storage_args.len(),
+                                            mutable,
+                                        ));
+                                        storage_args.push(ctype);
+                                    } else if is_entity(elem) {
                                         if mutable {
                                             return Err(Error::EntityCantBeMutable(arg.span()));
                                         }
-                                        let name = format_ident!("entity");
-                                        parameters.push(Parameter::Entity(name));
+                                        parameters.push(Parameter::Entity);
+                                    } else if is_entities(elem) {
+                                        if mutable {
+                                            return Err(Error::EntityCantBeMutable(arg.span()));
+                                        }
+                                        parameters.push(Parameter::Entities);
                                     } else {
                                         parameters.push(Parameter::Component(
                                             name,
                                             component_args.len(),
                                             mutable,
                                         ));
+                                        component_args.push(elem.clone());
                                     }
-                                    component_args.push(elem.clone());
                                 }
                             }
                         }
@@ -722,6 +852,7 @@ impl Sig {
             resource_args,
             state_args,
             component_args,
+            storage_args,
             outputs,
             output_names: Vec::default(),
         })
@@ -827,6 +958,38 @@ fn is_entity(ty: &Type) -> bool {
     is_type(ty, &["Entity"])
         || is_type(ty, &["specs", "Entity"])
         || is_type(ty, &["specs", "world", "Entity"])
+}
+
+fn is_entities(ty: &Type) -> bool {
+    is_type(ty, &["GameEntities"]) || is_type(ty, &["ecs_engine", "GameEntities"])
+}
+
+fn is_storage(ty: &Type) -> bool {
+    is_read_storage(ty) || is_write_storage(ty)
+}
+
+fn is_read_storage(ty: &Type) -> bool {
+    is_type(ty, &["GameReadStorage"]) || is_type(ty, &["ecs_engine", "GameReadStorage"])
+}
+
+fn is_write_storage(ty: &Type) -> bool {
+    is_type(ty, &["GameWriteStorage"]) || is_type(ty, &["specs", "GameWriteStorage"])
+}
+
+fn get_storage_type(ty: &Type) -> Result<Type, Error> {
+    if let Type::Path(path) = ty {
+        if let Some(seg) = path.path.segments.last() {
+            if let PathArguments::AngleBracketed(args) = &seg.arguments {
+                if args.args.len() == 1 {
+                    let arg = args.args.last().unwrap();
+                    if let GenericArgument::Type(ty) = arg {
+                        return Ok(ty.clone());
+                    }
+                }
+            }
+        }
+    }
+    return Err(Error::InvalidStorageType(ty.span()));
 }
 
 #[proc_macro_attribute]
