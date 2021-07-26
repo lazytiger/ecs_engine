@@ -15,4 +15,5 @@ proc-macro2 = "1.0"
 convert_case = "0.4"
 lazy_static = "1.4"
 thiserror = "1.0"
+mysql = "21.0"
 generator = { path = "../generator" }

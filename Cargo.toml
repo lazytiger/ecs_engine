@@ -31,4 +31,4 @@ bytes = "1.0"
 debug = []
 
 [workspace]
-members = ["codegen", "generator"]
+members = ["codegen", "generator", "dataproxy"]

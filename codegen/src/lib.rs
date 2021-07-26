@@ -6,8 +6,8 @@ use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{
     parse_macro_input, parse_quote, spanned::Spanned, Attribute, FnArg, GenericArgument, ItemFn,
-    Lit, LitBool, LitStr, Meta, Pat, PathArguments, ReturnType, Signature, Type, TypePath,
-    Visibility,
+    ItemStruct, Lit, LitBool, LitStr, Meta, Pat, PathArguments, ReturnType, Signature, Type,
+    TypePath, Visibility,
 };
 
 use generator::Generator;
@@ -1146,4 +1146,35 @@ pub fn setup(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     )
     .into()
+}
+
+#[proc_macro_derive(FromRow)]
+pub fn derive_from_rows(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemStruct);
+    let name = input.ident.clone();
+    let row_len = input.fields.len();
+    let mut field_names = Vec::new();
+    let mut field_indexes = Vec::new();
+    for field in &input.fields {
+        field_indexes.push(field_names.len());
+        field_names.push(field.ident.clone().unwrap());
+    }
+    quote!(
+        impl ::mysql::prelude::FromRow for #name {
+            fn from_row_opt(row: ::mysql::Row) -> Result<Self, ::mysql::FromRowError>
+            where
+                Self: Sized,
+            {
+                if row.len() != #row_len {
+                    Err(::mysql::FromRowError(row))
+                } else {
+                    Ok(Self {
+                        #(
+                            #field_names: row.get(#field_indexes).ok_or_else(||::mysql::FromRowError(row.clone()))?,
+                        )*
+                    })
+                }
+            }
+        }
+    ).into()
 }
