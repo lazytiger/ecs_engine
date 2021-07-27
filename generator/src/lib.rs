@@ -100,35 +100,53 @@ impl Trait {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum DataType {
-    String(Option<usize>),
-    U32(Option<usize>),
+    String {
+        size: Option<usize>,
+    },
+    U32 {
+        size: Option<usize>,
+    },
     U64,
-    S32(Option<usize>),
+    S32 {
+        size: Option<usize>,
+    },
     S64,
     F32,
     F64,
     Bool,
-    Bytes(Option<usize>),
-    List(Box<DataType>, Option<usize>),
-    Map(Box<DataType>, Box<DataType>, Option<usize>),
-    Custom(String, Option<usize>),
+    Bytes {
+        size: Option<usize>,
+    },
+    List {
+        r#type: Box<DataType>,
+        size: Option<usize>,
+    },
+    Map {
+        key: Box<DataType>,
+        value: Box<DataType>,
+        size: Option<usize>,
+    },
+    Custom {
+        r#type: String,
+        size: Option<usize>,
+    },
 }
 
 impl DataType {
     fn to_pb_type(&self) -> String {
         match self {
-            DataType::String(_) => "string".into(),
-            DataType::U32(_) => "uint32".into(),
+            DataType::String { .. } => "string".into(),
+            DataType::U32 { .. } => "uint32".into(),
             DataType::U64 => "uint64".into(),
-            DataType::S32(_) => "sint32".into(),
+            DataType::S32 { .. } => "sint32".into(),
             DataType::S64 => "sint64".into(),
             DataType::F32 => "float".into(),
             DataType::F64 => "double".into(),
             DataType::Bool => "bool".into(),
-            DataType::Bytes(_) => "bytes".into(),
-            DataType::Custom(name, _) => name.clone(),
-            DataType::List(name, _) => format!("repeated {}", name.to_pb_type()),
-            DataType::Map(key, value, _) => {
+            DataType::Bytes { .. } => "bytes".into(),
+            DataType::Custom { r#type, .. } => r#type.clone(),
+            DataType::List { r#type, .. } => format!("repeated {}", r#type.to_pb_type()),
+            DataType::Map { key, value, .. } => {
                 format!("map<{}, {}>", key.to_pb_type(), value.to_pb_type())
             }
         }
@@ -162,18 +180,20 @@ impl DataType {
 
     fn to_db_type(&self) -> String {
         match self {
-            DataType::String(Some(len)) => format!("VARCHAR({})", len),
-            DataType::U32(Some(len)) => format!("{} UNSIGNED", Self::db_integer_type(*len)),
+            DataType::String { size: Some(len) } => format!("VARCHAR({})", len),
+            DataType::U32 { size: Some(len) } => {
+                format!("{} UNSIGNED", Self::db_integer_type(*len))
+            }
             DataType::U64 => "BIGINT(20) UNSIGNED".into(),
-            DataType::S32(Some(len)) => Self::db_integer_type(*len),
+            DataType::S32 { size: Some(len) } => Self::db_integer_type(*len),
             DataType::S64 => "BIGINT(20) UNSIGNED".into(),
             DataType::F32 => "FLOAT".into(),
             DataType::F64 => "DOUBLE".into(),
             DataType::Bool => "TINYINT(3) UNSIGNED".into(),
-            DataType::Bytes(len) => Self::db_bytes_type(len.unwrap_or(1 << 16)),
-            DataType::List(_, len) => Self::db_bytes_type(len.unwrap_or(1 << 16)),
-            DataType::Map(_, _, len) => Self::db_bytes_type(len.unwrap_or(1 << 16)),
-            DataType::Custom(_, len) => Self::db_bytes_type(len.unwrap_or(1 << 16)),
+            DataType::Bytes { size } => Self::db_bytes_type(size.unwrap_or(1 << 16)),
+            DataType::List { size, .. } => Self::db_bytes_type(size.unwrap_or(1 << 16)),
+            DataType::Map { size, .. } => Self::db_bytes_type(size.unwrap_or(1 << 16)),
+            DataType::Custom { size, .. } => Self::db_bytes_type(size.unwrap_or(1 << 16)),
             _ => {
                 panic!("database type should specify length")
             }
@@ -451,11 +471,11 @@ impl Generator {
         for (path, cf) in &configs {
             for config in &cf.configs {
                 for f in &config.fields {
-                    if let DataType::List(..) = f.r#type {
+                    if let DataType::List { .. } = f.r#type {
                         return Err(Error::ComponentListUsed(path.clone(), config.name.clone()));
                     }
-                    if let DataType::Map(_, v, _) = &f.r#type {
-                        if let DataType::Custom(..) = v.as_ref() {
+                    if let DataType::Map { value, .. } = &f.r#type {
+                        if let DataType::Custom { .. } = value.as_ref() {
                             continue;
                         } else {
                             return Err(Error::ComponentListUsed(
@@ -612,11 +632,11 @@ impl Generator {
                     }
                     let index = f.index as usize;
                     match f.r#type {
-                        DataType::Custom(..) => {
+                        DataType::Custom { .. } => {
                             single_numbers.push(index);
                             single_names.push(format_ident!("get_{}", f.name));
                         }
-                        DataType::Map(..) => {
+                        DataType::Map { .. } => {
                             map_numbers.push(index);
                             map_names.push(format_ident!("get_{}", f.name));
                         }
