@@ -8,3 +8,4 @@ edition = "2018"
 [dependencies]
 mysql = "21.0"
 codegen = { path = "../codegen" }
+bytes = "1.0"

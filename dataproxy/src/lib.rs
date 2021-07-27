@@ -1,3 +1,3 @@
 mod types;
 
-pub use types::Table;
+pub use types::{BoolValue, Column, Index, Table};
