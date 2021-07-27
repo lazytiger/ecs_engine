@@ -26,6 +26,7 @@ cfg-if = "1.0"
 notify = "4.0"
 specs-hierarchy = "0.6"
 bytes = "1.0"
+mysql = "21.0"
 
 [features]
 debug = []

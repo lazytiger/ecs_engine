@@ -10,7 +10,7 @@ use syn::{
     TypePath, Visibility,
 };
 
-use generator::Generator;
+use generator::parse_config;
 
 #[derive(thiserror::Error, Debug)]
 enum Error {
@@ -1070,7 +1070,7 @@ pub fn request(attr: TokenStream, item: TokenStream) -> TokenStream {
         path.segments
             .iter()
             .for_each(|seg| config_path.push(seg.ident.to_string()));
-        match Generator::parse_config(config_path) {
+        match parse_config(config_path) {
             Err(err) => {
                 let message = format!("parse request dir failed:{:?}", err);
                 return quote!(compile_error!(#message);).into();
