@@ -100,36 +100,82 @@ impl Trait {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum DataType {
-    String,
-    U32,
+    String(Option<usize>),
+    U32(Option<usize>),
     U64,
-    S32,
+    S32(Option<usize>),
     S64,
     F32,
     F64,
     Bool,
-    Bytes,
-    List(Box<DataType>),
-    Map(Box<DataType>, Box<DataType>),
-    Custom(String),
+    Bytes(Option<usize>),
+    List(Box<DataType>, Option<usize>),
+    Map(Box<DataType>, Box<DataType>, Option<usize>),
+    Custom(String, Option<usize>),
 }
 
 impl DataType {
     fn to_pb_type(&self) -> String {
         match self {
-            DataType::String => "string".into(),
-            DataType::U32 => "uint32".into(),
+            DataType::String(_) => "string".into(),
+            DataType::U32(_) => "uint32".into(),
             DataType::U64 => "uint64".into(),
-            DataType::S32 => "sint32".into(),
+            DataType::S32(_) => "sint32".into(),
             DataType::S64 => "sint64".into(),
             DataType::F32 => "float".into(),
             DataType::F64 => "double".into(),
             DataType::Bool => "bool".into(),
-            DataType::Bytes => "bytes".into(),
-            DataType::Custom(name) => name.clone(),
-            DataType::List(name) => format!("repeated {}", name.to_pb_type()),
-            DataType::Map(key, value) => {
+            DataType::Bytes(_) => "bytes".into(),
+            DataType::Custom(name, _) => name.clone(),
+            DataType::List(name, _) => format!("repeated {}", name.to_pb_type()),
+            DataType::Map(key, value, _) => {
                 format!("map<{}, {}>", key.to_pb_type(), value.to_pb_type())
+            }
+        }
+    }
+
+    fn db_integer_type(len: usize) -> String {
+        if len <= 3 {
+            "TINYINT(3)"
+        } else if len <= 5 {
+            "SMALLINT(5)"
+        } else if len <= 9 {
+            "MEDIUMINT(9)"
+        } else {
+            "INT(11)"
+        }
+        .into()
+    }
+
+    fn db_bytes_type(len: usize) -> String {
+        if len <= 1 << 8 {
+            "TINYBLOB"
+        } else if len <= 1 << 16 {
+            "BLOB"
+        } else if len <= 1 << 24 {
+            "MEDIUMBLOB"
+        } else {
+            "LONGBLOB"
+        }
+        .into()
+    }
+
+    fn to_db_type(&self) -> String {
+        match self {
+            DataType::String(Some(len)) => format!("VARCHAR({})", len),
+            DataType::U32(Some(len)) => format!("{} UNSIGNED", Self::db_integer_type(*len)),
+            DataType::U64 => "BIGINT(20) UNSIGNED".into(),
+            DataType::S32(Some(len)) => Self::db_integer_type(*len),
+            DataType::S64 => "BIGINT(20) UNSIGNED".into(),
+            DataType::F32 => "FLOAT".into(),
+            DataType::F64 => "DOUBLE".into(),
+            DataType::Bool => "TINYINT(3) UNSIGNED".into(),
+            DataType::Bytes(len) => Self::db_bytes_type(len.unwrap_or(1 << 16)),
+            DataType::List(_, len) => Self::db_bytes_type(len.unwrap_or(1 << 16)),
+            DataType::Map(_, _, len) => Self::db_bytes_type(len.unwrap_or(1 << 16)),
+            DataType::Custom(_, len) => Self::db_bytes_type(len.unwrap_or(1 << 16)),
+            _ => {
+                panic!("database type should specify length")
             }
         }
     }
@@ -405,11 +451,11 @@ impl Generator {
         for (path, cf) in &configs {
             for config in &cf.configs {
                 for f in &config.fields {
-                    if let DataType::List(_) = f.r#type {
+                    if let DataType::List(..) = f.r#type {
                         return Err(Error::ComponentListUsed(path.clone(), config.name.clone()));
                     }
-                    if let DataType::Map(_, v) = &f.r#type {
-                        if let DataType::Custom(_) = v.as_ref() {
+                    if let DataType::Map(_, v, _) = &f.r#type {
+                        if let DataType::Custom(..) = v.as_ref() {
                             continue;
                         } else {
                             return Err(Error::ComponentListUsed(
@@ -566,7 +612,7 @@ impl Generator {
                     }
                     let index = f.index as usize;
                     match f.r#type {
-                        DataType::Custom(_) => {
+                        DataType::Custom(..) => {
                             single_numbers.push(index);
                             single_names.push(format_ident!("get_{}", f.name));
                         }
