@@ -1,22 +1,15 @@
 use crate::{
-    format_file, gen_messages, gen_protos, parse_config, string_to_u32, DataType, Error,
-    SyncDirection, Trait,
+    format_file, gen_messages, gen_protos, parse_config, string_to_u32, ConfigFile, DataType,
+    Error, SyncDirection, Trait,
 };
 use bytes::BytesMut;
 use convert_case::{Case, Casing};
+use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use std::{fmt::Write as _, fs::File, io::Write, path::PathBuf};
 
-pub fn gen_dataset(
-    dataset_dir: PathBuf,
-    mut config_dir: PathBuf,
-    mut proto_dir: PathBuf,
-) -> Result<(), Error> {
-    config_dir.push("dataset");
-    proto_dir.push("dataset");
-
-    let configs = parse_config(config_dir)?;
-    for (path, cf) in &configs {
+fn validate(configs: &Vec<(PathBuf, ConfigFile)>) -> Result<(), Error> {
+    for (path, cf) in configs {
         for config in &cf.configs {
             for f in &config.fields {
                 if let DataType::List { .. } = f.r#type {
@@ -32,6 +25,79 @@ pub fn gen_dataset(
             }
         }
     }
+    Ok(())
+}
+
+fn gen_position_code(name: &Ident, x: &Option<String>, y: &Option<String>) -> TokenStream {
+    let x = format_ident!("{}", x.clone().unwrap_or("get_x".into()));
+    let y = format_ident!("{}", y.clone().unwrap_or("get_y".into()));
+
+    quote!(
+        impl ecs_engine::Position for #name {
+            fn x(&self) -> f32 {
+                self.data.#x()
+            }
+            fn y(&self) -> f32 {
+                self.data.#y()
+            }
+        }
+    )
+}
+
+fn gen_scene_data_code(
+    name: &Ident,
+    id: &Option<String>,
+    min_x: &Option<String>,
+    min_y: &Option<String>,
+    row: &Option<String>,
+    column: &Option<String>,
+    grid_size: &Option<String>,
+) -> TokenStream {
+    let id = format_ident!("{}", id.clone().unwrap_or("get_id".into()));
+    let min_x = format_ident!("{}", min_x.clone().unwrap_or("get_min_x".into()));
+    let min_y = format_ident!("{}", min_y.clone().unwrap_or("get_min_y".into()));
+    let row = format_ident!("{}", row.clone().unwrap_or("get_row".into()));
+    let column = format_ident!("{}", column.clone().unwrap_or("get_column".into()));
+    let grid_size = format_ident!("{}", grid_size.clone().unwrap_or("get_grid_size".into()));
+    quote!(
+        impl ecs_engine::SceneData for #name {
+            fn id(&self) -> u32 {
+                self.data.#id()
+            }
+
+            fn get_min_x(&self) -> f32 {
+                self.data.#min_x()
+            }
+
+            fn get_min_y(&self) -> f32 {
+                self.data.#min_y()
+            }
+
+            fn get_column(&self) -> i32 {
+                self.data.#column()
+            }
+
+            fn get_row(&self) -> i32 {
+                self.data.#row()
+            }
+
+            fn grid_size(&self) -> f32 {
+                self.data.#grid_size()
+            }
+        }
+    )
+}
+
+pub fn gen_dataset(
+    dataset_dir: PathBuf,
+    mut config_dir: PathBuf,
+    mut proto_dir: PathBuf,
+) -> Result<(), Error> {
+    config_dir.push("dataset");
+    proto_dir.push("dataset");
+
+    let configs = parse_config(config_dir)?;
+    validate(&configs)?;
 
     gen_messages(&configs, proto_dir.clone(), true)?;
     gen_protos(proto_dir, dataset_dir.clone())?;
@@ -75,19 +141,7 @@ pub fn gen_dataset(
                             if !position_code.is_empty() {
                                 return Err(Error::DuplicatePosition);
                             }
-                            let x = format_ident!("{}", x.clone().unwrap_or("get_x".into()));
-                            let y = format_ident!("{}", y.clone().unwrap_or("get_y".into()));
-
-                            position_code = quote!(
-                                impl ecs_engine::Position for #name {
-                                    fn x(&self) -> f32 {
-                                        self.data.#x()
-                                    }
-                                    fn y(&self) -> f32 {
-                                        self.data.#y()
-                                    }
-                                }
-                            );
+                            position_code = gen_position_code(&name, x, y);
                         }
                         Trait::SceneData {
                             id,
@@ -100,45 +154,8 @@ pub fn gen_dataset(
                             if !scene_data_code.is_empty() {
                                 return Err(Error::DuplicateSceneData);
                             }
-                            let id = format_ident!("{}", id.clone().unwrap_or("get_id".into()));
-                            let min_x =
-                                format_ident!("{}", min_x.clone().unwrap_or("get_min_x".into()));
-                            let min_y =
-                                format_ident!("{}", min_y.clone().unwrap_or("get_min_y".into()));
-                            let row = format_ident!("{}", row.clone().unwrap_or("get_row".into()));
-                            let column =
-                                format_ident!("{}", column.clone().unwrap_or("get_column".into()));
-                            let grid_size = format_ident!(
-                                "{}",
-                                grid_size.clone().unwrap_or("get_grid_size".into())
-                            );
-                            scene_data_code = quote!(
-                                impl ecs_engine::SceneData for #name {
-                                    fn id(&self) -> u32 {
-                                        self.data.#id()
-                                    }
-
-                                    fn get_min_x(&self) -> f32 {
-                                        self.data.#min_x()
-                                    }
-
-                                    fn get_min_y(&self) -> f32 {
-                                        self.data.#min_y()
-                                    }
-
-                                    fn get_column(&self) -> i32 {
-                                        self.data.#column()
-                                    }
-
-                                    fn get_row(&self) -> i32 {
-                                        self.data.#row()
-                                    }
-
-                                    fn grid_size(&self) -> f32 {
-                                        self.data.#grid_size()
-                                    }
-                                }
-                            );
+                            scene_data_code =
+                                gen_scene_data_code(&name, id, min_x, min_y, row, column, grid_size)
                         }
                         Trait::DropEntity { .. } => {
                             return Err(Error::InvalidDropEntity);

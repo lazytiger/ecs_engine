@@ -1,7 +1,152 @@
 use crate::{generator::gen_io_config, Error};
 use convert_case::{Case, Casing};
+use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use std::path::PathBuf;
+
+fn keep_order_dispatch(
+    cmds: &Vec<u32>,
+    files: &Vec<Ident>,
+    names: &Vec<Ident>,
+    vnames: &Vec<Ident>,
+) -> TokenStream {
+    quote!(
+        fn dispatch(&mut self, ident:RequestIdent, data:Vec<u8>) {
+            if let Err(err) = match ident {
+                RequestIdent::Token(token) => self.token.send(token).map_err(|err|format!("{}", err)),
+                RequestIdent::Close(entity) => {
+                    if !self.input_cache.contains_key(&entity) {
+                        self.input_cache.insert(entity, (true, VecDeque::new()));
+                    }
+                    let (next, cache) = self.input_cache.get_mut(&entity).unwrap();
+                    if *next {
+                        self.input_cache.remove(&entity);
+                        self.close
+                            .send((entity, Closing(true)))
+                            .map_err(|err| format!("{}", err))
+                    } else {
+                        cache.push_back(AllRequest::Closing(Closing(true)));
+                        Ok(())
+                    }
+                },
+                RequestIdent::Entity(entity) => {
+                    if !self.input_cache.contains_key(&entity) {
+                        self.input_cache.insert(entity, (true, VecDeque::new()));
+                    }
+                    let (next, cache) = self.input_cache.get_mut(&entity).unwrap();
+
+                    let mut buffer = data.as_slice();
+                    let cmd = BigEndian::read_u32(buffer);
+                    buffer = &buffer[4..];
+                    match cmd {
+                        #(
+                            #cmds => {
+                                let mut data = #files::#names::new();
+                                data.merge_from_bytes(buffer).unwrap();
+                                let data = #names::new(data);
+                                if *next && cache.is_empty() {
+                                    *next = false;
+                                    self.#vnames.send((entity, data)).map_err(|err|format!("{}", err))
+                                } else {
+                                    if self.keep_duplicate {
+                                        cache.push_back(AllRequest::#names(data));
+                                    } else {
+                                        if let Some(AllRequest::#names(old)) = cache.back_mut() {
+                                            *old = data;
+                                        } else {
+                                            cache.push_back(AllRequest::#names(data));
+                                        }
+                                    }
+                                    if *next {
+                                        self.do_next(entity);
+                                    }
+                                    Ok(())
+                                }
+                            },
+                        )*
+                            _ => {
+                                log::error!("invalid cmd:{}", cmd);
+                                self.close
+                                    .send((entity, Closing(false)))
+                                    .map_err(|err| format!("{}", err))
+                            },
+                    }
+                }
+            } {
+                    log::error!("send request to ecs failed:{}", err);
+            }
+        }
+    )
+}
+
+fn disorder_dispatch(
+    cmds: &Vec<u32>,
+    files: &Vec<Ident>,
+    names: &Vec<Ident>,
+    vnames: &Vec<Ident>,
+) -> TokenStream {
+    quote!(
+        fn dispatch(&mut self, ident:RequestIdent, data:Vec<u8>) {
+            if let Err(err) = match ident {
+                RequestIdent::Token(token) => self.token.send(token).map_err(|err|format!("{}", err)),
+                RequestIdent::Close(entity) => self.close
+                    .send((entity, Closing(true)))
+                    .map_err(|err| format!("{}", err)),
+                RequestIdent::Entity(entity) => {
+                    let mut buffer = data.as_slice();
+                    let cmd = BigEndian::read_u32(buffer);
+                    buffer = &buffer[4..];
+                    match cmd {
+                        #(
+                            #cmds => {
+                                let mut data = #files::#names::new();
+                                data.merge_from_bytes(buffer).unwrap();
+                                let data = #names::new(data);
+                                self.#vnames.send((entity, data)).map_err(|err|format!("{}", err))
+                            },
+                        )*
+                            _ => {
+                                log::error!("invalid cmd:{}", cmd);
+                                self.close
+                                    .send((entity, Closing(false)))
+                                    .map_err(|err| format!("{}", err))
+                            },
+                    }
+                }
+            } {
+                    log::error!("send request to ecs failed:{}", err);
+            }
+        }
+    )
+}
+
+fn keep_order_do_next(names: &Vec<Ident>, vnames: &Vec<Ident>) -> TokenStream {
+    quote!(
+        fn do_next(&mut self, entity:Entity) {
+            let mut clean = false;
+            if let Some((next, cache)) = self.input_cache.get_mut(&entity) {
+                if cache.is_empty() {
+                    *next = true;
+                } else {
+                    if let Err(err) = {
+                        match cache.pop_front().unwrap() {
+                            #(AllRequest::#names(data) => self.#vnames.send((entity, data)).map_err(|err|format!("{}", err)),)*
+                            AllRequest::Closing(data) => {
+                                clean = true;
+                                self.close.send((entity, data)).map_err(|err|format!("{}", err))
+                            }
+                        }
+                    } {
+                        log::error!("send request to ecs failed:{}", err);
+                    }
+                }
+            }
+            if clean {
+                self.input_cache.remove(&entity);
+            }
+        }
+    )
+}
 
 pub fn gen_request(
     keep_order: bool,
@@ -52,107 +197,9 @@ pub fn gen_request(
             };
 
             let dispatch = if keep_order {
-                quote!(
-                    fn dispatch(&mut self, ident:RequestIdent, data:Vec<u8>) {
-                        if let Err(err) = match ident {
-                            RequestIdent::Token(token) => self.token.send(token).map_err(|err|format!("{}", err)),
-                            RequestIdent::Close(entity) => {
-                                if !self.input_cache.contains_key(&entity) {
-                                    self.input_cache.insert(entity, (true, VecDeque::new()));
-                                }
-                                let (next, cache) = self.input_cache.get_mut(&entity).unwrap();
-                                if *next {
-                                    self.input_cache.remove(&entity);
-                                    self.close
-                                        .send((entity, Closing(true)))
-                                        .map_err(|err| format!("{}", err))
-                                } else {
-                                    cache.push_back(AllRequest::Closing(Closing(true)));
-                                    Ok(())
-                                }
-                            },
-                            RequestIdent::Entity(entity) => {
-                                if !self.input_cache.contains_key(&entity) {
-                                    self.input_cache.insert(entity, (true, VecDeque::new()));
-                                }
-                                let (next, cache) = self.input_cache.get_mut(&entity).unwrap();
-
-                                let mut buffer = data.as_slice();
-                                let cmd = BigEndian::read_u32(buffer);
-                                buffer = &buffer[4..];
-                                match cmd {
-                                    #(
-                                        #cmds => {
-                                            let mut data = #files::#names::new();
-                                            data.merge_from_bytes(buffer).unwrap();
-                                            let data = #names::new(data);
-                                            if *next && cache.is_empty() {
-                                                *next = false;
-                                                self.#vnames.send((entity, data)).map_err(|err|format!("{}", err))
-                                            } else {
-                                                if self.keep_duplicate {
-                                                    cache.push_back(AllRequest::#names(data));
-                                                } else {
-                                                    if let Some(AllRequest::#names(old)) = cache.back_mut() {
-                                                        *old = data;
-                                                    } else {
-                                                        cache.push_back(AllRequest::#names(data));
-                                                    }
-                                                }
-                                                if *next {
-                                                    self.do_next(entity);
-                                                }
-                                                Ok(())
-                                            }
-                                        },
-                                    )*
-                                        _ => {
-                                            log::error!("invalid cmd:{}", cmd);
-                                            self.close
-                                                .send((entity, Closing(false)))
-                                                .map_err(|err| format!("{}", err))
-                                        },
-                                }
-                            }
-                        } {
-                                log::error!("send request to ecs failed:{}", err);
-                        }
-                    }
-                )
+                keep_order_dispatch(&cmds, &files, &names, &vnames)
             } else {
-                quote!(
-                    fn dispatch(&mut self, ident:RequestIdent, data:Vec<u8>) {
-                        if let Err(err) = match ident {
-                            RequestIdent::Token(token) => self.token.send(token).map_err(|err|format!("{}", err)),
-                            RequestIdent::Close(entity) => self.close
-                                .send((entity, Closing(true)))
-                                .map_err(|err| format!("{}", err)),
-                            RequestIdent::Entity(entity) => {
-                                let mut buffer = data.as_slice();
-                                let cmd = BigEndian::read_u32(buffer);
-                                buffer = &buffer[4..];
-                                match cmd {
-                                    #(
-                                        #cmds => {
-                                            let mut data = #files::#names::new();
-                                            data.merge_from_bytes(buffer).unwrap();
-                                            let data = #names::new(data);
-                                            self.#vnames.send((entity, data)).map_err(|err|format!("{}", err))
-                                        },
-                                    )*
-                                        _ => {
-                                            log::error!("invalid cmd:{}", cmd);
-                                            self.close
-                                                .send((entity, Closing(false)))
-                                                .map_err(|err| format!("{}", err))
-                                        },
-                                }
-                            }
-                        } {
-                                log::error!("send request to ecs failed:{}", err);
-                        }
-                    }
-                )
+                disorder_dispatch(&cmds, &files, &names, &vnames)
             };
 
             let all_request = if keep_order {
@@ -169,31 +216,7 @@ pub fn gen_request(
             };
 
             let do_next = if keep_order {
-                quote!(
-                    fn do_next(&mut self, entity:Entity) {
-                        let mut clean = false;
-                        if let Some((next, cache)) = self.input_cache.get_mut(&entity) {
-                            if cache.is_empty() {
-                                *next = true;
-                            } else {
-                                if let Err(err) = {
-                                    match cache.pop_front().unwrap() {
-                                        #(AllRequest::#names(data) => self.#vnames.send((entity, data)).map_err(|err|format!("{}", err)),)*
-                                        AllRequest::Closing(data) => {
-                                            clean = true;
-                                            self.close.send((entity, data)).map_err(|err|format!("{}", err))
-                                        }
-                                    }
-                                } {
-                                    log::error!("send request to ecs failed:{}", err);
-                                }
-                            }
-                        }
-                        if clean {
-                            self.input_cache.remove(&entity);
-                        }
-                    }
-                )
+                keep_order_do_next(&names, &vnames)
             } else {
                 quote!(
                     fn do_next(&mut self, entity: Entity) {}
