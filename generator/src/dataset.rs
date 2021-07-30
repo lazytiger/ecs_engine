@@ -23,6 +23,28 @@ fn validate(configs: &Vec<(PathBuf, ConfigFile)>) -> Result<(), Error> {
                     }
                 }
             }
+            if let Some(indexes) = &config.indexes {
+                let mut names: Vec<_> = indexes.iter().map(|index| &index.name).collect();
+                names.sort();
+                names.dedup();
+                if names.len() != indexes.len() {
+                    return Err(Error::DuplicateIndexName);
+                }
+
+                for index in indexes {
+                    let mut names = index.columns.clone();
+                    names.sort();
+                    names.dedup();
+                    if names.len() != index.columns.len() {
+                        return Err(Error::DuplicateIndexColumn);
+                    }
+                    for column in &index.columns {
+                        if !config.fields.iter().any(|field| &field.name == column) {
+                            return Err(Error::InvalidIndexColumnName);
+                        }
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -83,6 +105,240 @@ fn gen_scene_data_code(
 
             fn grid_size(&self) -> f32 {
                 self.data.#grid_size()
+            }
+        }
+    )
+}
+
+fn gen_backend_code(
+    mod_name: &Ident,
+    name: &Ident,
+    table_name: &String,
+    select: &String,
+    columns: &Vec<TokenStream>,
+) -> TokenStream {
+    quote! {
+        impl MysqlBackend for #mod_name::#name {
+            fn table_def() -> Table {
+                let mut table = Table::default();
+                table.set_engine("InnoDb");
+                table.set_charset("utf8mb4");
+                table.set_name(#table_name);
+                #(
+                    #columns
+                    table.columns.push(column);
+                )*
+                table
+            }
+
+            fn load(&mut self, conn:&mut mysql::PooledConn) -> Result<(), mysql::Error> {
+                conn.query_first(#select, Params::Empty)?
+            }
+
+            fn save(&self, conn:&mut mysql::PooledConn) -> Result<(), mysql::Error> {
+                Ok(())
+            }
+        }
+    }
+}
+
+fn gen_dm_code(
+    vname: &String,
+    mod_name: &Ident,
+    name: &Ident,
+    client_mask: u64,
+    around_mask: u64,
+    database_mask: u64,
+    team_mask: u64,
+    single_numbers: &Vec<usize>,
+    single_names: &Vec<Ident>,
+    map_numbers: &Vec<usize>,
+    map_names: &Vec<Ident>,
+) -> TokenStream {
+    quote! {
+        impl DirectionMask for #mod_name::#name {
+
+            #[allow(unused_variables)]
+            fn mask_by_direction(&self, dir:SyncDirection, ms: &mut MaskSet) {
+                let mask = match dir {
+                    SyncDirection::Client => #client_mask,
+                    SyncDirection::Around => #around_mask,
+                    SyncDirection::Database => #database_mask,
+                    SyncDirection::Team => #team_mask,
+                };
+                ms.mask &= mask;
+                ms.set.iter_mut().for_each(|(k, set)| {
+                    match *k {
+                        #(
+                            #single_numbers => {
+                                if let Some(ms) = set.get_mut(&(0.into())) {
+                                    self.#single_names().mask_by_direction(dir, ms);
+                                }
+                            }
+                        )*
+                        #(
+                            #map_numbers => {
+                                self.#map_names().iter().for_each(|(k, f)|{
+                                    if let Some(ms)  = set.get_mut(&(k.clone().into()))  {
+                                        f.mask_by_direction(dir, ms);
+                                    }
+                                });
+                            }
+                        )*
+                        _ => panic!("unknown field in {}", #vname),
+                    }
+                })
+            }
+        }
+    }
+}
+
+fn gen_dataset_type() -> TokenStream {
+    quote!(
+        #[derive(Debug, Default, Clone)]
+        pub struct Type<T: Default + Clone, const N: usize, const C: u32> {
+            data: T,
+            database_mask: Option<MaskSet>,
+            client_mask: Option<MaskSet>,
+            around_mask: Option<MaskSet>,
+            team_mask: Option<MaskSet>,
+        }
+
+        impl<T: Message + Default + Clone, const N: usize, const C: u32> Type<T, N, C> {
+            pub fn new() -> Self {
+                let around_mask: usize = SyncDirection::Around.into();
+                let client_mask: usize = SyncDirection::Client.into();
+                let database_mask: usize = SyncDirection::Database.into();
+                let team_mask: usize = SyncDirection::Team.into();
+
+                let around_mask = if N & around_mask != 0 {
+                    Some(MaskSet::default())
+                } else {
+                    None
+                };
+
+                let client_mask = if N & client_mask != 0 {
+                    Some(MaskSet::default())
+                } else {
+                    None
+                };
+                let database_mask = if N & database_mask != 0 {
+                    Some(MaskSet::default())
+                } else {
+                    None
+                };
+                let team_mask = if N & team_mask != 0 {
+                    Some(MaskSet::default())
+                } else {
+                    None
+                };
+                Self {
+                    data: T::new(),
+                    client_mask,
+                    database_mask,
+                    team_mask,
+                    around_mask,
+                }
+            }
+        }
+
+        impl<T: Message + Default + Mask + DirectionMask + Clone, const N: usize, const C: u32>
+            DataSet for Type<T, N, C>
+        {
+            fn commit(&mut self) {
+                let mut ms = None;
+                if self.client_mask.is_some() {
+                    let ms = ms.get_or_insert_with(|| self.data.mask_set());
+                    *self.client_mask.as_mut().unwrap() |= ms;
+                }
+                if self.database_mask.is_some() {
+                    let ms = ms.get_or_insert_with(|| self.data.mask_set());
+                    *self.database_mask.as_mut().unwrap() |= ms;
+                }
+                if self.team_mask.is_some() {
+                    let ms = ms.get_or_insert_with(|| self.data.mask_set());
+                    *self.team_mask.as_mut().unwrap() |= ms;
+                }
+                if self.around_mask.is_some() {
+                    let ms = ms.get_or_insert_with(|| self.data.mask_set());
+                    *self.around_mask.as_mut().unwrap() |= ms;
+                }
+                self.data.clear_mask();
+            }
+
+            fn encode(&mut self, id: u32, dir: SyncDirection) -> Option<Vec<u8>> {
+                let mask = match dir {
+                    SyncDirection::Client => {
+                        if let Some(mask) = &mut self.client_mask {
+                            self.data.mask_by_direction(dir, mask);
+                            mask
+                        } else {
+                            return None;
+                        }
+                    }
+                    SyncDirection::Database => {
+                        if let Some(mask) = &mut self.database_mask {
+                            self.data.mask_by_direction(dir, mask);
+                            mask
+                        } else {
+                            return None;
+                        }
+                    }
+                    SyncDirection::Team => {
+                        if let Some(mask) = &mut self.team_mask {
+                            self.data.mask_by_direction(dir, mask);
+                            mask
+                        } else {
+                            return None;
+                        }
+                    }
+                    SyncDirection::Around => {
+                        if let Some(mask) = &mut self.around_mask {
+                            self.data.mask_by_direction(dir, mask);
+                            mask
+                        } else {
+                            return None;
+                        }
+                    }
+                };
+                let mut data = vec![0u8; 12];
+                self.data.set_mask(mask);
+                if let Err(err) = self.data.write_to_vec(&mut data) {
+                    log::error!("encode data failed:{}", err);
+                    return None;
+                } else {
+                    let length = (data.len() - 4) as u32;
+                    let header = data.as_mut_slice();
+                    BigEndian::write_u32(header, length);
+                    BigEndian::write_u32(&mut header[4..], id);
+                    BigEndian::write_u32(&mut header[8..], C);
+                }
+                self.data.clear_mask();
+                mask.clear();
+                Some(data)
+            }
+
+            fn is_data_dirty(&self) -> bool {
+                self.data.is_dirty()
+            }
+
+            fn is_direction_enabled(dir: SyncDirection) -> bool {
+                let mask: usize = dir.into();
+                mask & N != 0
+            }
+        }
+
+        impl<T: Default + Clone, const N: usize, const C: u32> Deref for Type<T, N, C> {
+            type Target = T;
+
+            fn deref(&self) -> &Self::Target {
+                &self.data
+            }
+        }
+
+        impl<T: Default + Clone, const N: usize, const C: u32> DerefMut for Type<T, N, C> {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.data
             }
         }
     )
@@ -223,69 +479,28 @@ pub fn gen_dataset(
             })
             .unwrap();
             let select = unsafe { String::from_utf8_unchecked(select.to_vec()) };
-            let backend_code = quote! {
-                impl MysqlBackend for #mod_name::#name {
-                    fn table_def() -> Table {
-                        let mut table = Table::default();
-                        table.set_engine("InnoDb");
-                        table.set_charset("utf8mb4");
-                        table.set_name(#table_name);
-                        #(
-                            #columns
-                            table.columns.push(column);
-                        )*
-                        table
-                    }
 
-                    fn load(&mut self, conn:&mut mysql::PooledConn) -> Result<(), mysql::Error> {
-                        conn.query_first(#select, Params::Empty)?
-                    }
-
-                    fn save(&self, conn:&mut mysql::PooledConn) -> Result<(), mysql::Error> {
-                        Ok(())
-                    }
-                }
-            };
+            let backend_code = gen_backend_code(&mod_name, &name, &table_name, &select, &columns);
             backend_codes.push(backend_code);
-            let dm_code = quote! {
-                impl DirectionMask for #mod_name::#name {
 
-                    #[allow(unused_variables)]
-                    fn mask_by_direction(&self, dir:SyncDirection, ms: &mut MaskSet) {
-                        let mask = match dir {
-                            SyncDirection::Client => #client_mask,
-                            SyncDirection::Around => #around_mask,
-                            SyncDirection::Database => #database_mask,
-                            SyncDirection::Team => #team_mask,
-                        };
-                        ms.mask &= mask;
-                        ms.set.iter_mut().for_each(|(k, set)| {
-                            match *k {
-                                #(
-                                    #single_numbers => {
-                                        if let Some(ms) = set.get_mut(&(0.into())) {
-                                            self.#single_names().mask_by_direction(dir, ms);
-                                        }
-                                    }
-                                )*
-                                #(
-                                    #map_numbers => {
-                                        self.#map_names().iter().for_each(|(k, f)|{
-                                            if let Some(ms)  = set.get_mut(&(k.clone().into()))  {
-                                                f.mask_by_direction(dir, ms);
-                                            }
-                                        });
-                                    }
-                                )*
-                                _ => panic!("unknown field in {}", #vname),
-                            }
-                        })
-                    }
-                }
-            };
+            let dm_code = gen_dm_code(
+                &vname,
+                &mod_name,
+                &name,
+                client_mask,
+                around_mask,
+                database_mask,
+                team_mask,
+                &single_numbers,
+                &single_names,
+                &map_numbers,
+                &map_names,
+            );
             dm_codes.push(dm_code);
         }
     }
+    let dataset_type_code = gen_dataset_type();
+
     let data = quote!(
             #![allow(unused_imports)]
             #(mod #mods;)*
@@ -304,155 +519,7 @@ pub fn gen_dataset(
             use dataproxy::{Table, BoolValue, Column, Index};
             #(pub use #inners;)*
 
-            pub const POSITION_INDEX:usize = 0;
-            pub const SCENE_INDEX:usize = 1;
-
-            #[derive(Debug, Default, Clone)]
-            pub struct Type<T:Default+Clone, const N: usize, const C: u32> {
-                data: T,
-                database_mask: Option<MaskSet>,
-                client_mask: Option<MaskSet>,
-                around_mask: Option<MaskSet>,
-                team_mask: Option<MaskSet>,
-            }
-
-            impl<T:Message + Default + Clone, const N:usize, const C: u32> Type<T, N, C> {
-                pub fn new() ->Self {
-                    let around_mask:usize = SyncDirection::Around.into();
-                    let client_mask:usize = SyncDirection::Client.into();
-                    let database_mask:usize = SyncDirection::Database.into();
-                    let team_mask:usize = SyncDirection::Team.into();
-
-                    let around_mask = if N & around_mask != 0 {
-                        Some(MaskSet::default())
-                    } else {
-                        None
-                    };
-
-                    let client_mask = if N & client_mask != 0 {
-                        Some(MaskSet::default())
-                    } else {
-                        None
-                    };
-                    let database_mask = if N & database_mask != 0 {
-                        Some(MaskSet::default())
-                    } else {
-                        None
-                    };
-                    let team_mask = if N & team_mask != 0 {
-                        Some(MaskSet::default())
-                    } else {
-                        None
-                    };
-                    Self {
-                        data:T::new(),
-                        client_mask,
-                        database_mask,
-                        team_mask,
-                        around_mask,
-                    }
-                }
-
-            }
-
-            impl<T:Message + Default + Mask + DirectionMask + Clone, const N:usize, const C:u32> DataSet for Type<T, N, C> {
-                fn commit(&mut self) {
-                    let mut ms = None;
-                    if self.client_mask.is_some() {
-                        let ms = ms.get_or_insert_with(||self.data.mask_set());
-                        *self.client_mask.as_mut().unwrap() |= ms;
-                    }
-                    if self.database_mask.is_some() {
-                        let ms = ms.get_or_insert_with(||self.data.mask_set());
-                        *self.database_mask.as_mut().unwrap() |= ms;
-                    }
-                    if self.team_mask.is_some() {
-                        let ms = ms.get_or_insert_with(||self.data.mask_set());
-                        *self.team_mask.as_mut().unwrap() |= ms;
-                    }
-                    if self.around_mask.is_some() {
-                        let ms = ms.get_or_insert_with(||self.data.mask_set());
-                        *self.around_mask.as_mut().unwrap() |= ms;
-                    }
-                    self.data.clear_mask();
-                }
-
-                fn encode(&mut self, id:u32, dir:SyncDirection) ->Option<Vec<u8>> {
-                    let mask = match dir {
-                        SyncDirection::Client => {
-                            if let Some(mask) = &mut self.client_mask {
-                                self.data.mask_by_direction(dir, mask);
-                                mask
-                            } else {
-                                return None;
-                            }
-                        }
-                        SyncDirection::Database =>  {
-                            if let Some(mask) = &mut self.database_mask {
-                                self.data.mask_by_direction(dir, mask);
-                                mask
-                            } else {
-                                return None;
-                            }
-                        }
-                        SyncDirection::Team =>  {
-                            if let Some(mask) = &mut self.team_mask {
-                                self.data.mask_by_direction(dir, mask);
-                                mask
-                            } else {
-                                return None;
-                            }
-                        }
-                        SyncDirection::Around => {
-                            if let Some(mask) = &mut self.around_mask {
-                                self.data.mask_by_direction(dir, mask);
-                                mask
-                            } else {
-                                return None;
-                            }
-                        }
-                    };
-                    let mut data = vec![0u8; 12];
-                    self.data.set_mask(mask);
-                    if let Err(err) = self.data.write_to_vec(&mut data) {
-                        log::error!("encode data failed:{}", err);
-                        return None;
-                    } else {
-                        let length = (data.len() - 4) as u32;
-                        let header = data.as_mut_slice();
-                        BigEndian::write_u32(header, length);
-                        BigEndian::write_u32(&mut header[4..], id);
-                        BigEndian::write_u32(&mut header[8..], C);
-                    }
-                    self.data.clear_mask();
-                    mask.clear();
-                    Some(data)
-                }
-
-                fn is_data_dirty(&self) -> bool {
-                    self.data.is_dirty()
-                }
-
-                fn is_direction_enabled(dir:SyncDirection) -> bool {
-                    let mask:usize = dir.into();
-                    mask & N != 0
-                }
-            }
-
-            impl<T:Default + Clone, const N:usize, const C:u32> Deref for Type<T, N, C> {
-                type Target = T;
-
-                fn deref(&self) -> &Self::Target {
-                    &self.data
-                }
-            }
-
-            impl<T:Default + Clone, const N:usize, const C:u32> DerefMut for Type<T, N, C> {
-                fn deref_mut(&mut self) -> &mut Self::Target {
-                    &mut self.data
-                }
-            }
-
+            #dataset_type_code
 
             #(
                 impl Component for Type<#files::#names, #ns, #cmds> {

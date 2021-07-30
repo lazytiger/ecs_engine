@@ -93,7 +93,7 @@ impl PartialEq for Column {
 pub struct Index {
     table: String,
     pub non_unique: u32,
-    key_name: String,
+    pub key_name: String,
     pub seq_in_index: usize,
     pub column_name: String,
     collation: String,
@@ -441,5 +441,21 @@ impl Table {
             let result = self.gen_create_table()?;
             Ok(vec![result])
         }
+    }
+
+    pub fn add_index(&mut self, name: String, columns: &[String], unique: bool, asc: bool) {
+        let mut indexes = Vec::new();
+        for (i, column) in columns.iter().enumerate() {
+            let mut index = Index::default();
+            index.key_name = name.clone();
+            index.column_name = column.clone();
+            index.index_comment = "BTREE".into();
+            index.non_unique = if unique { 0 } else { 1 };
+            index.visible = BoolValue::Yes;
+            index.seq_in_index = i + 1;
+            index.collation = if asc { "A" } else { "D" }.into();
+            indexes.push(index);
+        }
+        self.indexes.insert(name, indexes);
     }
 }

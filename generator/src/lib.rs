@@ -220,6 +220,7 @@ pub struct Config {
     pub name: String,
     pub hide: Option<bool>,
     pub traits: Option<Vec<Trait>>,
+    pub indexes: Option<Vec<TableIndex>>,
     pub fields: Vec<Field>,
 }
 
@@ -253,6 +254,14 @@ impl Config {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TableIndex {
+    name: String,
+    columns: Vec<String>,
+    asc: Option<bool>,
+    unique: Option<bool>,
+}
+
 #[derive(Debug, From)]
 pub enum Error {
     Io(std::io::Error),
@@ -263,6 +272,9 @@ pub enum Error {
     DuplicatePosition,
     DuplicateSceneData,
     InvalidDropEntity,
+    DuplicateIndexName,
+    DuplicateIndexColumn,
+    InvalidIndexColumnName,
     ComponentListUsed(PathBuf, String),
 }
 
