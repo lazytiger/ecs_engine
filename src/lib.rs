@@ -29,7 +29,7 @@ use std::{
 };
 
 pub use backend::{CommandId, DropEntity, Input, Output, SceneSyncBackend};
-pub use codegen::{export, init_log, request, setup, system};
+pub use codegen::{export, init_log, request, setup, system, FromRow};
 pub use component::{
     Closing, HashComponent, NetToken, Position, SceneData, SceneMember, SelfSender, TeamMember,
 };

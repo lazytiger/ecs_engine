@@ -84,7 +84,7 @@ impl Generator {
         )?;
         gen_response(
             self.response_dir.clone(),
-            self.proto_dir.clone(),
+            self.config_dir.clone(),
             self.proto_dir.clone(),
         )?;
         gen_dataset(

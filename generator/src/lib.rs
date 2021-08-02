@@ -4,6 +4,7 @@ mod request;
 mod response;
 
 use std::{
+    fmt::Write as _,
     fs::{read_dir, File},
     io::{Read, Write},
     path::PathBuf,
@@ -17,9 +18,11 @@ use protobuf_codegen_pure::{Codegen, Customize};
 use quote::quote;
 use serde_derive::{Deserialize, Serialize};
 
+use bytes::BytesMut;
 pub use generator::Generator;
+use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialOrd, PartialEq)]
 pub enum SyncDirection {
     Around,
     Client,
@@ -205,6 +208,23 @@ impl DataType {
             }
         }
     }
+
+    fn to_rust_type(&self) -> TokenStream {
+        match self {
+            DataType::String { .. } => quote!(String),
+            DataType::U32 { .. } => quote!(u32),
+            DataType::U64 => quote!(u64),
+            DataType::S32 { .. } => quote!(i32),
+            DataType::S64 => quote!(i64),
+            DataType::F32 => quote!(f32),
+            DataType::F64 => quote!(f64),
+            DataType::Bool => quote!(bool),
+            DataType::Bytes { .. } => quote!(Vec<u8>),
+            DataType::List { .. } => quote!(Vec<u8>),
+            DataType::Map { .. } => quote!(Vec<u8>),
+            DataType::Custom { .. } => quote!(Vec<u8>),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -220,7 +240,7 @@ pub struct Config {
     pub name: String,
     pub hide: Option<bool>,
     pub traits: Option<Vec<Trait>>,
-    pub indexes: Option<Vec<TableIndex>>,
+    pub indexes: Option<HashMap<IndexType, TableIndex>>,
     pub fields: Vec<Field>,
 }
 
@@ -252,11 +272,53 @@ impl Config {
         }
         mask
     }
+
+    fn is_database_column(&self, column: &str) -> bool {
+        self.fields
+            .iter()
+            .filter(|field| {
+                field.dirs.is_none()
+                    || field
+                        .dirs
+                        .as_ref()
+                        .unwrap()
+                        .contains(&SyncDirection::Database)
+            })
+            .any(|field| field.name.eq_ignore_ascii_case(column))
+    }
+
+    fn get_primary_cond(&self) -> Result<String, std::fmt::Error> {
+        if let Some(indexes) = &self.indexes {
+            if let Some(index) = indexes.get(&IndexType::Primary) {
+                let mut buffer = BytesMut::new();
+                for column in &index.columns {
+                    write!(buffer, "`{}` = ? AND ", column)?;
+                }
+                buffer.truncate(buffer.len() - 5);
+                return Ok(unsafe { String::from_utf8_unchecked(buffer.to_vec()) });
+            }
+        }
+        panic!("primary key not found in {}", self.name);
+    }
+
+    fn get_primary_fields(&self) -> Vec<String> {
+        if let Some(indexes) = &self.indexes {
+            if let Some(index) = indexes.get(&IndexType::Primary) {
+                return index.columns.clone();
+            }
+        }
+        panic!("primary key not found in {}", self.name);
+    }
+}
+
+#[derive(PartialOrd, PartialEq, Serialize, Deserialize, Debug, Eq, Hash)]
+pub enum IndexType {
+    Primary,
+    Index(String),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TableIndex {
-    name: String,
     columns: Vec<String>,
     asc: Option<bool>,
     unique: Option<bool>,
@@ -266,13 +328,13 @@ pub struct TableIndex {
 pub enum Error {
     Io(std::io::Error),
     Ron(ron::Error, PathBuf),
+    Fmt(std::fmt::Error),
     DuplicateFieldNumber(String),
     DuplicateCmd,
     DuplicateDropEntity,
     DuplicatePosition,
     DuplicateSceneData,
     InvalidDropEntity,
-    DuplicateIndexName,
     DuplicateIndexColumn,
     InvalidIndexColumnName,
     ComponentListUsed(PathBuf, String),

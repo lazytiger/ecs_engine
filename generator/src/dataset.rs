@@ -24,14 +24,7 @@ fn validate(configs: &Vec<(PathBuf, ConfigFile)>) -> Result<(), Error> {
                 }
             }
             if let Some(indexes) = &config.indexes {
-                let mut names: Vec<_> = indexes.iter().map(|index| &index.name).collect();
-                names.sort();
-                names.dedup();
-                if names.len() != indexes.len() {
-                    return Err(Error::DuplicateIndexName);
-                }
-
-                for index in indexes {
+                for (_, index) in indexes {
                     let mut names = index.columns.clone();
                     names.sort();
                     names.dedup();
@@ -39,7 +32,7 @@ fn validate(configs: &Vec<(PathBuf, ConfigFile)>) -> Result<(), Error> {
                         return Err(Error::DuplicateIndexColumn);
                     }
                     for column in &index.columns {
-                        if !config.fields.iter().any(|field| &field.name == column) {
+                        if !config.is_database_column(column.as_str()) {
                             return Err(Error::InvalidIndexColumnName);
                         }
                     }
@@ -116,8 +109,24 @@ fn gen_backend_code(
     table_name: &String,
     select: &String,
     columns: &Vec<TokenStream>,
+    fields: &Vec<Ident>,
+    field_types: &Vec<TokenStream>,
+    conds: &Vec<Ident>,
 ) -> TokenStream {
+    let rname = format_ident!("Mysql{}", name);
+    let rconds: Vec<_> = conds
+        .iter()
+        .map(|cond| {
+            let ident = format_ident!("get_{}", cond);
+            quote!(self.#ident())
+        })
+        .collect();
     quote! {
+        #[derive(FromRow)]
+        struct #rname {
+            #(#fields:#field_types,)*
+        }
+
         impl MysqlBackend for #mod_name::#name {
             fn table_def() -> Table {
                 let mut table = Table::default();
@@ -131,8 +140,13 @@ fn gen_backend_code(
                 table
             }
 
-            fn load(&mut self, conn:&mut mysql::PooledConn) -> Result<(), mysql::Error> {
-                conn.query_first(#select, Params::Empty)?
+            fn load(&mut self, conn:&mut mysql::PooledConn) -> Result<bool, mysql::Error> {
+                let data:Option<#rname> = conn.exec_first(#select, (#(#rconds,)*))?;
+                if let Some(data) = data {
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
             }
 
             fn save(&self, conn:&mut mysql::PooledConn) -> Result<(), mysql::Error> {
@@ -344,6 +358,165 @@ fn gen_dataset_type() -> TokenStream {
     )
 }
 
+pub fn gen_data_mask(configs: &Vec<(PathBuf, ConfigFile)>) -> Vec<TokenStream> {
+    let all_dirs = vec![
+        SyncDirection::Team,
+        SyncDirection::Database,
+        SyncDirection::Around,
+        SyncDirection::Client,
+    ];
+    let mut dm_codes = Vec::new();
+    for (f, cf) in configs {
+        let mod_name = format_ident!("{}", f.file_stem().unwrap().to_str().unwrap());
+        for c in &cf.configs {
+            let mut client_mask = 0u64;
+            let mut around_mask = 0u64;
+            let mut database_mask = 0u64;
+            let mut team_mask = 0u64;
+            let mut single_numbers = Vec::new();
+            let mut single_names = Vec::new();
+            let mut map_numbers = Vec::new();
+            let mut map_names = Vec::new();
+
+            let vname = c.name.clone();
+            let name = format_ident!("{}", c.name);
+
+            for f in &c.fields {
+                let dirs = f.dirs.as_ref().unwrap_or(&all_dirs);
+                let mask = 1 << (f.index as u64);
+                for dir in dirs {
+                    match dir {
+                        SyncDirection::Client => client_mask |= mask,
+                        SyncDirection::Database => database_mask |= mask,
+                        SyncDirection::Team => team_mask |= mask,
+                        SyncDirection::Around => around_mask |= mask,
+                    }
+                }
+                let index = f.index as usize;
+                match f.r#type {
+                    DataType::Custom { .. } => {
+                        single_numbers.push(index);
+                        single_names.push(format_ident!("get_{}", f.name));
+                    }
+                    DataType::Map { .. } => {
+                        map_numbers.push(index);
+                        map_names.push(format_ident!("get_{}", f.name));
+                    }
+                    _ => {}
+                }
+            }
+
+            let dm_code = gen_dm_code(
+                &vname,
+                &mod_name,
+                &name,
+                client_mask,
+                around_mask,
+                database_mask,
+                team_mask,
+                &single_numbers,
+                &single_names,
+                &map_numbers,
+                &map_names,
+            );
+            dm_codes.push(dm_code);
+        }
+    }
+    dm_codes
+}
+
+pub fn gen_data_backend(
+    configs: &Vec<(PathBuf, ConfigFile)>,
+) -> Result<Vec<TokenStream>, std::fmt::Error> {
+    let all_dirs = vec![
+        SyncDirection::Team,
+        SyncDirection::Database,
+        SyncDirection::Around,
+        SyncDirection::Client,
+    ];
+    let mut backend_codes = Vec::new();
+
+    for (f, cf) in configs {
+        let mod_name = format_ident!("{}", f.file_stem().unwrap().to_str().unwrap());
+        for c in &cf.configs {
+            if !c.fields.iter().any(|field| {
+                field
+                    .dirs
+                    .as_ref()
+                    .unwrap_or(&all_dirs)
+                    .contains(&SyncDirection::Database)
+            }) {
+                continue;
+            }
+
+            let mut columns = Vec::new();
+            let mut fields = Vec::new();
+            let mut rust_field_types = Vec::new();
+
+            let mut select = BytesMut::new();
+            write!(select, "SELECT ")?;
+
+            let vname = c.name.clone();
+            let name = format_ident!("{}", c.name);
+
+            for f in &c.fields {
+                if !f
+                    .dirs
+                    .as_ref()
+                    .unwrap_or(&all_dirs)
+                    .contains(&SyncDirection::Database)
+                {
+                    continue;
+                }
+
+                let field = &f.name;
+                let field_type = f.r#type.to_db_type();
+
+                fields.push(format_ident!("{}", field));
+                rust_field_types.push(f.r#type.to_rust_type());
+
+                write!(select, " `{}`,", field)?;
+                let column = quote!(
+                    let mut column = Column::default();
+                    column.field = #field.into();
+                    column.field_type = #field_type.into();
+                    column.default = None;
+                    column.null = BoolValue::No;
+                );
+                columns.push(column);
+            }
+            let table_name = vname.to_case(Case::Snake);
+            select.truncate(select.len() - 1);
+            write!(
+                select,
+                " FROM `{}` WHERE {}",
+                table_name,
+                c.get_primary_cond()?
+            )?;
+
+            let conds: Vec<_> = c
+                .get_primary_fields()
+                .iter()
+                .map(|field| format_ident!("{}", field))
+                .collect();
+            let select = unsafe { String::from_utf8_unchecked(select.to_vec()) };
+
+            let backend_code = gen_backend_code(
+                &mod_name,
+                &name,
+                &table_name,
+                &select,
+                &columns,
+                &fields,
+                &rust_field_types,
+                &conds,
+            );
+            backend_codes.push(backend_code);
+        }
+    }
+    Ok(backend_codes)
+}
+
 pub fn gen_dataset(
     dataset_dir: PathBuf,
     mut config_dir: PathBuf,
@@ -363,17 +536,10 @@ pub fn gen_dataset(
     let mut files = Vec::new();
     let mut storages = Vec::new();
     let mut inners = Vec::new();
-    let mut dm_codes = Vec::new();
-    let mut backend_codes = Vec::new();
     let mut ns = Vec::new();
     let mut cmds = Vec::new();
     let mut vnames = Vec::new();
-    let all_dirs = vec![
-        SyncDirection::Team,
-        SyncDirection::Database,
-        SyncDirection::Around,
-        SyncDirection::Client,
-    ];
+
     let mut position_code = quote!();
     let mut scene_data_code = quote!();
     for (f, cf) in &configs {
@@ -422,83 +588,10 @@ pub fn gen_dataset(
             } else {
                 inners.push(quote!(#mod_name::#name));
             }
-            let mut client_mask = 0u64;
-            let mut around_mask = 0u64;
-            let mut database_mask = 0u64;
-            let mut team_mask = 0u64;
-            let mut single_numbers = Vec::new();
-            let mut single_names = Vec::new();
-            let mut map_numbers = Vec::new();
-            let mut map_names = Vec::new();
-            let mut columns = Vec::new();
-
-            let mut select = BytesMut::new();
-            let mut condition = BytesMut::new();
-            write!(select, "SELECT").unwrap();
-            for f in &c.fields {
-                let dirs = f.dirs.as_ref().unwrap_or(&all_dirs);
-                let mask = 1 << (f.index as u64);
-                for dir in dirs {
-                    match dir {
-                        SyncDirection::Client => client_mask |= mask,
-                        SyncDirection::Database => database_mask |= mask,
-                        SyncDirection::Team => team_mask |= mask,
-                        SyncDirection::Around => around_mask |= mask,
-                    }
-                }
-                let index = f.index as usize;
-                match f.r#type {
-                    DataType::Custom { .. } => {
-                        single_numbers.push(index);
-                        single_names.push(format_ident!("get_{}", f.name));
-                    }
-                    DataType::Map { .. } => {
-                        map_numbers.push(index);
-                        map_names.push(format_ident!("get_{}", f.name));
-                    }
-                    _ => {}
-                }
-                let field = &f.name;
-                let field_type = f.r#type.to_db_type();
-                if database_mask & mask != 0 {
-                    write!(select, " `{}`,", field).unwrap();
-                    let column = quote!(
-                        let mut column = Column::default();
-                        column.field = #field.into();
-                        column.field_type = #field_type.into();
-                        column.default = None;
-                        column.null = BoolValue::No;
-                    );
-                    columns.push(column);
-                }
-            }
-            select.truncate(select.len() - 1);
-            let table_name = vname.to_case(Case::Snake);
-            write!(select, " FROM `{}` WHERE {}", table_name, unsafe {
-                String::from_utf8_unchecked(condition.to_vec())
-            })
-            .unwrap();
-            let select = unsafe { String::from_utf8_unchecked(select.to_vec()) };
-
-            let backend_code = gen_backend_code(&mod_name, &name, &table_name, &select, &columns);
-            backend_codes.push(backend_code);
-
-            let dm_code = gen_dm_code(
-                &vname,
-                &mod_name,
-                &name,
-                client_mask,
-                around_mask,
-                database_mask,
-                team_mask,
-                &single_numbers,
-                &single_names,
-                &map_numbers,
-                &map_names,
-            );
-            dm_codes.push(dm_code);
         }
     }
+    let dm_codes = gen_data_mask(&configs);
+    let backend_codes = gen_data_backend(&configs)?;
     let dataset_type_code = gen_dataset_type();
 
     let data = quote!(
@@ -514,9 +607,10 @@ pub fn gen_dataset(
                 ops::{Deref, DerefMut},
             };
             use protobuf::{Message, MaskSet, Mask};
-            use ecs_engine::{SyncDirection, DataSet, CommitChangeSystem, GameDispatcherBuilder, SceneSyncBackend};
+            use ecs_engine::{SyncDirection, DataSet, CommitChangeSystem, GameDispatcherBuilder, SceneSyncBackend, FromRow};
             use byteorder::{BigEndian, ByteOrder};
             use dataproxy::{Table, BoolValue, Column, Index};
+            use mysql::prelude::Queryable;
             #(pub use #inners;)*
 
             #dataset_type_code
@@ -529,6 +623,9 @@ pub fn gen_dataset(
                 pub type #names = Type<#files::#names, #ns, #cmds>;
             )*
 
+            #position_code
+            #scene_data_code
+
             pub trait DirectionMask {
                 fn mask_by_direction(&self, direction: SyncDirection, ms: &mut MaskSet);
             }
@@ -537,14 +634,12 @@ pub fn gen_dataset(
             pub trait MysqlBackend {
                 fn table_def() -> Table;
 
-                fn load(&mut self, conn:&mut mysql::PooledConn) -> Result<(), mysql::Error>;
+                fn load(&mut self, conn:&mut mysql::PooledConn) -> Result<bool, mysql::Error>;
 
                 fn save(&self, conn:&mut mysql::PooledConn) -> Result<(), mysql::Error>;
             }
             #(#backend_codes)*
 
-            #position_code
-            #scene_data_code
 
             pub fn setup<B>(world:&mut World, builder:&mut GameDispatcherBuilder)
             where

@@ -443,17 +443,19 @@ impl Table {
         }
     }
 
-    pub fn add_index(&mut self, name: String, columns: &[String], unique: bool, asc: bool) {
+    pub fn add_index(&mut self, name: Option<String>, columns: &[String], unique: bool, asc: bool) {
         let mut indexes = Vec::new();
+        let name = name.unwrap_or("PRIMARY".into());
         for (i, column) in columns.iter().enumerate() {
             let mut index = Index::default();
-            index.key_name = name.clone();
-            index.column_name = column.clone();
-            index.index_comment = "BTREE".into();
+            index.table = self.status.name.clone();
             index.non_unique = if unique { 0 } else { 1 };
-            index.visible = BoolValue::Yes;
+            index.key_name = name.clone();
             index.seq_in_index = i + 1;
+            index.column_name = column.clone();
             index.collation = if asc { "A" } else { "D" }.into();
+            index.index_type = "BTREE".into();
+            index.visible = BoolValue::Yes;
             indexes.push(index);
         }
         self.indexes.insert(name, indexes);
