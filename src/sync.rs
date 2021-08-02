@@ -9,3 +9,20 @@ pub trait DataSet: Clone {
 
     fn is_direction_enabled(dir: SyncDirection) -> bool;
 }
+
+pub trait DataBackend {
+    type Connection;
+    type Error;
+
+    fn patch_table(
+        conn: &mut Self::Connection,
+        exec: bool,
+        database: Option<&str>,
+    ) -> Result<Vec<String>, Self::Error>;
+
+    fn select(&mut self, conn: &mut Self::Connection) -> Result<bool, Self::Error>;
+
+    fn insert(&self, conn: &mut Self::Connection) -> Result<bool, Self::Error>;
+
+    fn update(&self, conn: &mut Self::Connection) -> Result<bool, Self::Error>;
+}

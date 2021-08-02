@@ -163,15 +163,24 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn new(database: &str, table: &str, conn: &mut PooledConn) -> mysql::Result<Self> {
-        if let Some(status) = conn.query_first::<TableStatus, String>(format!(
-            "SHOW TABLE STATUS FROM {} like '{}'",
-            database, table
-        ))? {
-            let columns: Vec<Column> =
-                conn.query(format!("SHOW COLUMNS FROM {}.{}", database, table))?;
-            let indexes: Vec<Index> =
-                conn.query(format!("SHOW INDEX FROM {}.{}", database, table))?;
+    pub fn new(database: Option<&str>, table: &str, conn: &mut PooledConn) -> mysql::Result<Self> {
+        if let Some(status) =
+            conn.query_first::<TableStatus, String>(if let Some(database) = database {
+                format!("SHOW TABLE STATUS FROM `{}` like '{}'", database, table)
+            } else {
+                format!("SHOW TABLE STATUS like '{}'", table)
+            })?
+        {
+            let columns: Vec<Column> = conn.query(if let Some(database) = database {
+                format!("SHOW COLUMNS FROM `{}`.`{}`", database, table)
+            } else {
+                format!("SHOW COLUMNS FROM `{}`", table)
+            })?;
+            let indexes: Vec<Index> = conn.query(if let Some(database) = database {
+                format!("SHOW INDEX FROM `{}`.`{}`", database, table)
+            } else {
+                format!("SHOW INDEX FROM `{}`", table)
+            })?;
 
             let mut index_map = HashMap::new();
             for index in indexes {
@@ -248,7 +257,8 @@ impl Table {
         for (index_name, index_col) in &self.indexes {
             writeln!(buffer, "  {},", Self::gen_index_sql(index_name, index_col)?)?;
         }
-        buffer.truncate(buffer.len() - 1);
+        buffer.truncate(buffer.len() - 2);
+        writeln!(buffer)?;
         writeln!(
             buffer,
             ") ENGINE={} DEFAULT CHARSET={} COLLATE={}",

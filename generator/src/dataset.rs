@@ -1,6 +1,6 @@
 use crate::{
     format_file, gen_messages, gen_protos, parse_config, string_to_u32, ConfigFile, DataType,
-    Error, SyncDirection, Trait,
+    Error, IndexType, SyncDirection, Trait,
 };
 use bytes::BytesMut;
 use convert_case::{Case, Casing};
@@ -142,13 +142,13 @@ fn gen_scene_data_code(
 }
 
 fn gen_backend_code(
-    mod_name: &Ident,
     name: &Ident,
     table_name: &String,
     select: &String,
     insert: &String,
     update: &String,
     columns: &Vec<TokenStream>,
+    indexes: &Vec<TokenStream>,
     fields: &Vec<Ident>,
     field_types: &Vec<TokenStream>,
     customs: &Vec<u32>,
@@ -213,17 +213,29 @@ fn gen_backend_code(
             #(#fields:#field_types,)*
         }
 
-        impl MysqlBackend for #mod_name::#name {
-            fn table_def() -> Table {
-                let mut table = Table::default();
-                table.set_engine("InnoDb");
-                table.set_charset("utf8mb4");
-                table.set_name(#table_name);
+        impl DataBackend for #name {
+            type Connection = mysql::PooledConn;
+            type Error = Error;
+            fn patch_table(conn:&mut mysql::PooledConn, exec:bool, database:Option<&str>) -> Result<Vec<String>, Error> {
+                let mut new_table = Table::default();
+                new_table.set_engine("InnoDb");
+                new_table.set_charset("utf8mb4");
+                new_table.set_name(#table_name);
                 #(
                     #columns
-                    table.columns.push(column);
+                    new_table.columns.push(column);
                 )*
-                table
+                #(
+                    #indexes
+                )*
+                let old_table = Table::new(database, #table_name, conn)?;
+                let diff_sqls = new_table.diff(&old_table)?;
+                if exec {
+                    for sql in &diff_sqls {
+                        conn.exec_drop(sql, Params::Empty)?;
+                    }
+                }
+                Ok(diff_sqls)
             }
 
             fn select(&mut self, conn:&mut mysql::PooledConn) -> Result<bool, Error> {
@@ -529,8 +541,7 @@ pub fn gen_data_backend(
     ];
     let mut backend_codes = Vec::new();
 
-    for (f, cf) in configs {
-        let mod_name = format_ident!("{}", f.file_stem().unwrap().to_str().unwrap());
+    for (_, cf) in configs {
         for c in &cf.configs {
             if c.hide.is_some()
                 || !c.fields.iter().any(|field| {
@@ -596,6 +607,19 @@ pub fn gen_data_backend(
                 );
                 columns.push(column);
             }
+            let mut indexes = Vec::new();
+            for (index_type, index) in c.indexes.as_ref().unwrap() {
+                let name = match index_type {
+                    IndexType::Primary => quote!(None),
+                    IndexType::Index(name) => quote!(Some(#name.into())),
+                };
+                let columns = &index.columns;
+                let columns = quote!(vec![#(#columns.into(),)*]);
+                let asc = index.asc.is_some() && index.asc.unwrap();
+                let unique = index.unique.is_some() && index.unique.unwrap();
+                let code = quote!(new_table.add_index(#name, #columns.as_slice(), #asc, #unique););
+                indexes.push(code);
+            }
             select.truncate(select.len() - 1);
             insert.truncate(insert.len() - 1);
             update.truncate(update.len() - 1);
@@ -617,13 +641,13 @@ pub fn gen_data_backend(
             let update = unsafe { String::from_utf8_unchecked(update.to_vec()) };
 
             let backend_code = gen_backend_code(
-                &mod_name,
                 &name,
                 &table_name,
                 &select,
                 &insert,
                 &update,
                 &columns,
+                &indexes,
                 &fields,
                 &rust_field_types,
                 &customs,
@@ -716,20 +740,24 @@ pub fn gen_dataset(
             #![allow(unused_imports)]
             #(mod #mods;)*
 
+            use byteorder::{BigEndian, ByteOrder};
+            use dataproxy::{BoolValue, Column, Index, Table};
+            use derive_more::From;
+            use ecs_engine::{
+                CommitChangeSystem, DataBackend, DataSet, FromRow, GameDispatcherBuilder, SceneSyncBackend,
+                SyncDirection,
+            };
+            use mysql::{prelude::Queryable, Params};
+            pub use player::Bag;
+            use protobuf::{Mask, MaskSet, Message};
             use specs::{
-                Component, DefaultVecStorage, FlaggedStorage, HashMapStorage, NullStorage,
-                VecStorage,  Tracked, WorldExt, World,
+                Component, DefaultVecStorage, FlaggedStorage, HashMapStorage, NullStorage, Tracked, VecStorage,
+                World, WorldExt,
             };
             use std::{
                 any::Any,
                 ops::{Deref, DerefMut},
             };
-            use protobuf::{Message, MaskSet, Mask};
-            use ecs_engine::{SyncDirection, DataSet, CommitChangeSystem, GameDispatcherBuilder, SceneSyncBackend, FromRow};
-            use byteorder::{BigEndian, ByteOrder};
-            use dataproxy::{Table, BoolValue, Column, Index};
-            use mysql::prelude::Queryable;
-            use derive_more::From;
             #(pub use #inners;)*
 
             #dataset_type_code
@@ -750,21 +778,13 @@ pub fn gen_dataset(
             }
             #(#dm_codes)*
 
-            #[derive(From)]
+            #[derive(From, Debug)]
             pub enum Error {
-                MysqlError(mysql::Error),
-                PbError(protobuf::ProtobufError),
+                Mysql(mysql::Error),
+                Format(std::fmt::Error),
+                Protobuf(protobuf::ProtobufError),
             }
 
-            pub trait MysqlBackend {
-                fn table_def() -> Table;
-
-                fn select(&mut self, conn:&mut mysql::PooledConn) -> Result<bool, Error>;
-
-                fn insert(&self, conn:&mut mysql::PooledConn) -> Result<bool, Error>;
-
-                fn update(&self, conn:&mut mysql::PooledConn) -> Result<bool, Error>;
-            }
             #(#backend_codes)*
 
 

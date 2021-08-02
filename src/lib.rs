@@ -18,8 +18,8 @@ use crate::{
 
 use crate::{component::AroundFullData, resource::FrameCounter};
 use specs::{
-    BitSet, Dispatcher, DispatcherBuilder, Entities, ReadStorage, RunNow, System, World, WorldExt,
-    WriteStorage,
+    storage::ComponentEvent, BitSet, Dispatcher, DispatcherBuilder, Entities, ReadStorage, RunNow,
+    System, World, WorldExt, WriteStorage,
 };
 use std::{
     net::SocketAddr,
@@ -42,8 +42,7 @@ pub use libloading::os::windows::Symbol;
 pub use libloading::os::windows::Symbol;
 pub use network::{channel, BytesSender, RequestIdent};
 pub use resource::SceneManager;
-use specs::storage::ComponentEvent;
-pub use sync::DataSet;
+pub use sync::{DataBackend, DataSet};
 pub use system::{
     CleanStorageSystem, CloseSystem, CommitChangeSystem, GridSystem, HandshakeSystem, InputSystem,
     SceneSystem, TeamManagerSystem, TeamSystem,

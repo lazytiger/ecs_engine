@@ -6,7 +6,7 @@ fn run() -> mysql::Result<()> {
     let opts = Opts::from_url(url)?;
     let pool = Pool::new(opts)?;
     let mut conn = pool.get_conn()?;
-    let table = Table::new("game", "user", &mut conn)?;
+    let table = Table::new(None, "user", &mut conn)?;
     let mut new_table = Table::default();
     new_table.set_engine("InnoDb");
     new_table.set_name("user");
