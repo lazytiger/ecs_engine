@@ -615,9 +615,9 @@ pub fn gen_data_backend(
                 };
                 let columns = &index.columns;
                 let columns = quote!(vec![#(#columns.into(),)*]);
-                let asc = index.asc.is_some() && index.asc.unwrap();
+                let desc = index.desc.is_some() && index.desc.unwrap();
                 let unique = index.unique.is_some() && index.unique.unwrap();
-                let code = quote!(new_table.add_index(#name, #columns.as_slice(), #asc, #unique););
+                let code = quote!(new_table.add_index(#name, #columns.as_slice(), #desc, #unique););
                 indexes.push(code);
             }
             select.truncate(select.len() - 1);

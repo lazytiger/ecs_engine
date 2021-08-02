@@ -360,7 +360,7 @@ impl Table {
         let mut removed = Vec::new();
 
         while i < new_indexes.len() && j < old_indexes.len() {
-            match new_indexes[i].0.cmp(old_indexes[i].0) {
+            match new_indexes[i].0.cmp(old_indexes[j].0) {
                 Ordering::Less => {
                     inserted.push(new_indexes[i]);
                     i += 1;
@@ -453,9 +453,20 @@ impl Table {
         }
     }
 
-    pub fn add_index(&mut self, name: Option<String>, columns: &[String], unique: bool, asc: bool) {
+    pub fn add_index(
+        &mut self,
+        name: Option<String>,
+        columns: &[String],
+        mut unique: bool,
+        desc: bool,
+    ) {
         let mut indexes = Vec::new();
-        let name = name.unwrap_or("PRIMARY".into());
+        let name = if let Some(name) = name {
+            name
+        } else {
+            unique = true;
+            "PRIMARY".into()
+        };
         for (i, column) in columns.iter().enumerate() {
             let mut index = Index::default();
             index.table = self.status.name.clone();
@@ -463,7 +474,7 @@ impl Table {
             index.key_name = name.clone();
             index.seq_in_index = i + 1;
             index.column_name = column.clone();
-            index.collation = if asc { "A" } else { "D" }.into();
+            index.collation = if desc { "D" } else { "A" }.into();
             index.index_type = "BTREE".into();
             index.visible = BoolValue::Yes;
             indexes.push(index);

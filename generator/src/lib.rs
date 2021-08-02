@@ -331,7 +331,7 @@ pub enum IndexType {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TableIndex {
     columns: Vec<String>,
-    asc: Option<bool>,
+    desc: Option<bool>,
     unique: Option<bool>,
 }
 
