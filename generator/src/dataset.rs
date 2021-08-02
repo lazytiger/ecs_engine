@@ -13,27 +13,65 @@ fn validate(configs: &Vec<(PathBuf, ConfigFile)>) -> Result<(), Error> {
         for config in &cf.configs {
             for f in &config.fields {
                 if let DataType::List { .. } = f.r#type {
-                    return Err(Error::ComponentListUsed(path.clone(), config.name.clone()));
+                    return Err(Error::ComponentListUsed(
+                        path.clone(),
+                        config.name.clone(),
+                        f.name.clone(),
+                    ));
                 }
                 if let DataType::Map { value, .. } = &f.r#type {
+                    if config.hide.is_none() {
+                        return Err(Error::MapUsedAsRootDatasetType(
+                            path.clone(),
+                            config.name.clone(),
+                            f.name.clone(),
+                        ));
+                    }
                     if let DataType::Custom { .. } = value.as_ref() {
                         continue;
                     } else {
-                        return Err(Error::ComponentListUsed(path.clone(), config.name.clone()));
+                        return Err(Error::ComponentListUsed(
+                            path.clone(),
+                            config.name.clone(),
+                            f.name.clone(),
+                        ));
                     }
                 }
             }
             if let Some(indexes) = &config.indexes {
-                for (_, index) in indexes {
+                for (index_type, index) in indexes {
                     let mut names = index.columns.clone();
                     names.sort();
                     names.dedup();
                     if names.len() != index.columns.len() {
-                        return Err(Error::DuplicateIndexColumn);
+                        return Err(Error::DuplicateIndexColumn(
+                            path.clone(),
+                            config.name.clone(),
+                            index_type.clone(),
+                        ));
                     }
                     for column in &index.columns {
                         if !config.is_database_column(column.as_str()) {
-                            return Err(Error::InvalidIndexColumnName);
+                            return Err(Error::InvalidIndexColumnName(
+                                path.clone(),
+                                config.name.clone(),
+                                index_type.clone(),
+                            ));
+                        }
+                        let field = config.get_field(column.as_str()).unwrap();
+                        if !match field.r#type {
+                            DataType::U32 { .. } => true,
+                            DataType::U64 => true,
+                            DataType::S32 { .. } => true,
+                            DataType::S64 => true,
+                            DataType::String { .. } => true,
+                            _ => false,
+                        } {
+                            return Err(Error::InvalidIndexColumnType(
+                                path.clone(),
+                                config.name.clone(),
+                                index_type.clone(),
+                            ));
                         }
                     }
                 }
@@ -108,17 +146,65 @@ fn gen_backend_code(
     name: &Ident,
     table_name: &String,
     select: &String,
+    insert: &String,
+    update: &String,
     columns: &Vec<TokenStream>,
     fields: &Vec<Ident>,
     field_types: &Vec<TokenStream>,
+    customs: &Vec<u32>,
     conds: &Vec<Ident>,
 ) -> TokenStream {
     let rname = format_ident!("Mysql{}", name);
-    let rconds: Vec<_> = conds
+    let where_fields: Vec<_> = conds
         .iter()
         .map(|cond| {
             let ident = format_ident!("get_{}", cond);
             quote!(self.#ident())
+        })
+        .collect();
+    let insert_fields: Vec<_> = fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let ident = format_ident!("get_{}", field);
+            if customs[index] == 2 {
+                quote!(
+                    self.#ident().write_to_bytes()?
+                )
+            } else {
+                quote!(self.#ident())
+            }
+        })
+        .collect();
+    let update_fields: Vec<_> = fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let ident = format_ident!("get_{}", field);
+            if customs[index] == 2 {
+                quote!(
+                    self.#ident().write_to_bytes()?,
+                )
+            } else if customs[index] == 0 {
+                quote!(self.#ident(),)
+            } else {
+                quote!()
+            }
+        })
+        .collect();
+    let select_fields: Vec<_> = fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            if customs[index] == 2 {
+                let ident = format_ident!("mut_{}", field);
+                quote!(
+                    self.#ident().merge_from_bytes(data.#field.as_slice())?
+                )
+            } else {
+                let ident = format_ident!("set_{}", field);
+                quote!(self.#ident(data.#field))
+            }
         })
         .collect();
     quote! {
@@ -140,17 +226,24 @@ fn gen_backend_code(
                 table
             }
 
-            fn load(&mut self, conn:&mut mysql::PooledConn) -> Result<bool, mysql::Error> {
-                let data:Option<#rname> = conn.exec_first(#select, (#(#rconds,)*))?;
+            fn select(&mut self, conn:&mut mysql::PooledConn) -> Result<bool, Error> {
+                let data:Option<#rname> = conn.exec_first(#select, (#(#where_fields,)*))?;
                 if let Some(data) = data {
+                    #(#select_fields;)*
                     Ok(true)
                 } else {
                     Ok(false)
                 }
             }
 
-            fn save(&self, conn:&mut mysql::PooledConn) -> Result<(), mysql::Error> {
-                Ok(())
+            fn insert(&self, conn:&mut mysql::PooledConn) -> Result<bool, Error> {
+                let result = conn.exec_iter(#insert, (#(#insert_fields,)*))?;
+                Ok(result.affected_rows() == 1)
+            }
+
+            fn update(&self, conn:&mut mysql::PooledConn) -> Result<bool, Error> {
+                let result = conn.exec_iter(#update, (#(#update_fields)*#(#where_fields,)*))?;
+                Ok(result.affected_rows() == 1)
             }
         }
     }
@@ -439,25 +532,33 @@ pub fn gen_data_backend(
     for (f, cf) in configs {
         let mod_name = format_ident!("{}", f.file_stem().unwrap().to_str().unwrap());
         for c in &cf.configs {
-            if !c.fields.iter().any(|field| {
-                field
-                    .dirs
-                    .as_ref()
-                    .unwrap_or(&all_dirs)
-                    .contains(&SyncDirection::Database)
-            }) {
+            if c.hide.is_some()
+                || !c.fields.iter().any(|field| {
+                    field
+                        .dirs
+                        .as_ref()
+                        .unwrap_or(&all_dirs)
+                        .contains(&SyncDirection::Database)
+                })
+            {
                 continue;
             }
 
             let mut columns = Vec::new();
+            let mut customs = Vec::new();
             let mut fields = Vec::new();
             let mut rust_field_types = Vec::new();
 
-            let mut select = BytesMut::new();
-            write!(select, "SELECT ")?;
-
             let vname = c.name.clone();
+            let table_name = vname.to_case(Case::Snake);
             let name = format_ident!("{}", c.name);
+
+            let mut select = BytesMut::new();
+            let mut insert = BytesMut::new();
+            let mut update = BytesMut::new();
+            write!(select, "SELECT ")?;
+            write!(insert, "INSERT INTO `{}` SET ", table_name)?;
+            write!(update, "UPDATE `{}` SET ", table_name)?;
 
             for f in &c.fields {
                 if !f
@@ -474,8 +575,18 @@ pub fn gen_data_backend(
 
                 fields.push(format_ident!("{}", field));
                 rust_field_types.push(f.r#type.to_rust_type());
-
+                if c.is_primary_field(f.name.as_str()) {
+                    customs.push(1);
+                } else {
+                    write!(update, " `{}` = ?,", field)?;
+                    if matches!(f.r#type, DataType::Custom { .. }) {
+                        customs.push(2);
+                    } else {
+                        customs.push(0);
+                    }
+                }
                 write!(select, " `{}`,", field)?;
+                write!(insert, " `{}` = ?,", field)?;
                 let column = quote!(
                     let mut column = Column::default();
                     column.field = #field.into();
@@ -485,14 +596,16 @@ pub fn gen_data_backend(
                 );
                 columns.push(column);
             }
-            let table_name = vname.to_case(Case::Snake);
             select.truncate(select.len() - 1);
+            insert.truncate(insert.len() - 1);
+            update.truncate(update.len() - 1);
             write!(
                 select,
                 " FROM `{}` WHERE {}",
                 table_name,
                 c.get_primary_cond()?
             )?;
+            write!(update, " WHERE {}", c.get_primary_cond()?)?;
 
             let conds: Vec<_> = c
                 .get_primary_fields()
@@ -500,15 +613,20 @@ pub fn gen_data_backend(
                 .map(|field| format_ident!("{}", field))
                 .collect();
             let select = unsafe { String::from_utf8_unchecked(select.to_vec()) };
+            let insert = unsafe { String::from_utf8_unchecked(insert.to_vec()) };
+            let update = unsafe { String::from_utf8_unchecked(update.to_vec()) };
 
             let backend_code = gen_backend_code(
                 &mod_name,
                 &name,
                 &table_name,
                 &select,
+                &insert,
+                &update,
                 &columns,
                 &fields,
                 &rust_field_types,
+                &customs,
                 &conds,
             );
             backend_codes.push(backend_code);
@@ -611,6 +729,7 @@ pub fn gen_dataset(
             use byteorder::{BigEndian, ByteOrder};
             use dataproxy::{Table, BoolValue, Column, Index};
             use mysql::prelude::Queryable;
+            use derive_more::From;
             #(pub use #inners;)*
 
             #dataset_type_code
@@ -631,12 +750,20 @@ pub fn gen_dataset(
             }
             #(#dm_codes)*
 
+            #[derive(From)]
+            pub enum Error {
+                MysqlError(mysql::Error),
+                PbError(protobuf::ProtobufError),
+            }
+
             pub trait MysqlBackend {
                 fn table_def() -> Table;
 
-                fn load(&mut self, conn:&mut mysql::PooledConn) -> Result<bool, mysql::Error>;
+                fn select(&mut self, conn:&mut mysql::PooledConn) -> Result<bool, Error>;
 
-                fn save(&self, conn:&mut mysql::PooledConn) -> Result<(), mysql::Error>;
+                fn insert(&self, conn:&mut mysql::PooledConn) -> Result<bool, Error>;
+
+                fn update(&self, conn:&mut mysql::PooledConn) -> Result<bool, Error>;
             }
             #(#backend_codes)*
 

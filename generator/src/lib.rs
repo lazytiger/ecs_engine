@@ -274,17 +274,22 @@ impl Config {
     }
 
     fn is_database_column(&self, column: &str) -> bool {
+        if let Some(field) = self.get_field(column) {
+            field.dirs.is_none()
+                || field
+                    .dirs
+                    .as_ref()
+                    .unwrap()
+                    .contains(&SyncDirection::Database)
+        } else {
+            false
+        }
+    }
+
+    fn get_field(&self, column: &str) -> Option<&Field> {
         self.fields
             .iter()
-            .filter(|field| {
-                field.dirs.is_none()
-                    || field
-                        .dirs
-                        .as_ref()
-                        .unwrap()
-                        .contains(&SyncDirection::Database)
-            })
-            .any(|field| field.name.eq_ignore_ascii_case(column))
+            .find(|field| field.name.eq_ignore_ascii_case(column))
     }
 
     fn get_primary_cond(&self) -> Result<String, std::fmt::Error> {
@@ -309,9 +314,15 @@ impl Config {
         }
         panic!("primary key not found in {}", self.name);
     }
+
+    fn is_primary_field(&self, column: &str) -> bool {
+        self.get_primary_fields()
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(column))
+    }
 }
 
-#[derive(PartialOrd, PartialEq, Serialize, Deserialize, Debug, Eq, Hash)]
+#[derive(PartialOrd, PartialEq, Serialize, Deserialize, Debug, Eq, Hash, Clone)]
 pub enum IndexType {
     Primary,
     Index(String),
@@ -335,9 +346,16 @@ pub enum Error {
     DuplicatePosition,
     DuplicateSceneData,
     InvalidDropEntity,
-    DuplicateIndexColumn,
-    InvalidIndexColumnName,
-    ComponentListUsed(PathBuf, String),
+    #[from(ignore)]
+    DuplicateIndexColumn(PathBuf, String, IndexType),
+    #[from(ignore)]
+    InvalidIndexColumnName(PathBuf, String, IndexType),
+    #[from(ignore)]
+    InvalidIndexColumnType(PathBuf, String, IndexType),
+    #[from(ignore)]
+    MapUsedAsRootDatasetType(PathBuf, String, String),
+    #[from(ignore)]
+    ComponentListUsed(PathBuf, String, String),
 }
 
 pub fn read_files(input_dir: PathBuf) -> std::io::Result<Vec<PathBuf>> {
