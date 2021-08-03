@@ -22,7 +22,9 @@ pub trait DataBackend {
 
     fn select(&mut self, conn: &mut Self::Connection) -> Result<bool, Self::Error>;
 
-    fn insert(&self, conn: &mut Self::Connection) -> Result<bool, Self::Error>;
+    fn insert(&mut self, conn: &mut Self::Connection) -> Result<bool, Self::Error>;
 
-    fn update(&self, conn: &mut Self::Connection) -> Result<bool, Self::Error>;
+    fn update(&mut self, conn: &mut Self::Connection) -> Result<bool, Self::Error>;
+
+    fn delete(self, conn: &mut Self::Connection) -> Result<bool, Self::Error>;
 }

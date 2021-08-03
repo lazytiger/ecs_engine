@@ -242,7 +242,7 @@ where
                     std::any::type_name::<T>()
                 );
                 let mut data = data.clone();
-                data.mask_all();
+                data.mask_all(true);
                 data.commit();
                 if let Some(bytes) = data.encode(entity.id(), SyncDirection::Around) {
                     let tokens = NetToken::tokens(&token, member.mask());
@@ -264,7 +264,7 @@ where
                     std::any::type_name::<T>()
                 );
                 let mut data = data.clone();
-                data.mask_all();
+                data.mask_all(true);
                 data.commit();
                 if let Some(bytes) = data.encode(entity.id(), SyncDirection::Team) {
                     let tokens = NetToken::tokens(&token, member.mask());

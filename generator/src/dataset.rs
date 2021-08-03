@@ -147,6 +147,7 @@ fn gen_backend_code(
     select: &String,
     insert: &String,
     update: &String,
+    delete: &String,
     columns: &Vec<TokenStream>,
     indexes: &Vec<TokenStream>,
     fields: &Vec<Ident>,
@@ -248,13 +249,20 @@ fn gen_backend_code(
                 }
             }
 
-            fn insert(&self, conn:&mut mysql::PooledConn) -> Result<bool, Error> {
+            fn insert(&mut self, conn:&mut mysql::PooledConn) -> Result<bool, Error> {
+                self.mask_all(true);
                 let result = conn.exec_iter(#insert, (#(#insert_fields,)*))?;
                 Ok(result.affected_rows() == 1)
             }
 
-            fn update(&self, conn:&mut mysql::PooledConn) -> Result<bool, Error> {
+            fn update(&mut self, conn:&mut mysql::PooledConn) -> Result<bool, Error> {
+                self.mask_all(true);
                 let result = conn.exec_iter(#update, (#(#update_fields)*#(#where_fields,)*))?;
+                Ok(result.affected_rows() == 1)
+            }
+
+            fn delete(self, conn:&mut mysql::PooledConn) -> Result<bool, Error> {
+                let result = conn.exec_iter(#delete, (#(#where_fields,)*))?;
                 Ok(result.affected_rows() == 1)
             }
         }
@@ -382,7 +390,7 @@ fn gen_dataset_type() -> TokenStream {
                     let ms = ms.get_or_insert_with(|| self.data.mask_set());
                     *self.around_mask.as_mut().unwrap() |= ms;
                 }
-                self.data.clear_mask();
+                self.data.clear_mask(true);
             }
 
             fn encode(&mut self, id: u32, dir: SyncDirection) -> Option<Vec<u8>> {
@@ -432,7 +440,7 @@ fn gen_dataset_type() -> TokenStream {
                     BigEndian::write_u32(&mut header[4..], id);
                     BigEndian::write_u32(&mut header[8..], C);
                 }
-                self.data.clear_mask();
+                self.data.clear_mask(true);
                 mask.clear();
                 Some(data)
             }
@@ -567,9 +575,16 @@ pub fn gen_data_backend(
             let mut select = BytesMut::new();
             let mut insert = BytesMut::new();
             let mut update = BytesMut::new();
+            let mut delete = BytesMut::new();
             write!(select, "SELECT ")?;
             write!(insert, "INSERT INTO `{}` SET ", table_name)?;
             write!(update, "UPDATE `{}` SET ", table_name)?;
+            write!(
+                delete,
+                "DELETE FROM `{}` WHERE {}",
+                table_name,
+                c.get_primary_cond()?
+            )?;
 
             for f in &c.fields {
                 if !f
@@ -639,6 +654,7 @@ pub fn gen_data_backend(
             let select = unsafe { String::from_utf8_unchecked(select.to_vec()) };
             let insert = unsafe { String::from_utf8_unchecked(insert.to_vec()) };
             let update = unsafe { String::from_utf8_unchecked(update.to_vec()) };
+            let delete = unsafe { String::from_utf8_unchecked(delete.to_vec()) };
 
             let backend_code = gen_backend_code(
                 &name,
@@ -646,6 +662,7 @@ pub fn gen_data_backend(
                 &select,
                 &insert,
                 &update,
+                &delete,
                 &columns,
                 &indexes,
                 &fields,
