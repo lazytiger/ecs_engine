@@ -164,18 +164,24 @@ pub trait SceneData: Clone {
         let index = index as i32;
         let (row, column) = (self.get_row(), self.get_column());
         let x = index % column;
+        let min_x = if x == 0 {
+            0
+        } else if x == column - 1 {
+            column - 3
+        } else {
+            x - 1
+        };
         let y = index / column;
-        for i in [-1, 0, 1] {
-            let xx = x + i;
-            if xx < 0 || xx >= column {
-                continue;
-            }
-            for j in [-1, 0, 1] {
-                let yy = y + j;
-                if yy < 0 || yy >= row {
-                    continue;
-                }
-                data.push((yy * column + xx) as usize)
+        let min_y = if y == 0 {
+            0
+        } else if y == row - 1 {
+            row - 3
+        } else {
+            y - 1
+        };
+        for x in min_x..min_x + 2 {
+            for y in min_y..min_y + 2 {
+                data.push((y * column + x) as usize)
             }
         }
         data

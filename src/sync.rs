@@ -12,6 +12,7 @@ pub trait DataSet: Clone {
 
 pub trait DataBackend {
     type Connection;
+
     type Error;
 
     fn patch_table(
