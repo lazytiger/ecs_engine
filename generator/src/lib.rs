@@ -195,7 +195,7 @@ impl DataType {
             }
             DataType::U64 => "BIGINT(20) UNSIGNED".into(),
             DataType::S32 { size: Some(len) } => Self::db_integer_type(*len),
-            DataType::S64 => "BIGINT(20) UNSIGNED".into(),
+            DataType::S64 => "BIGINT(20)".into(),
             DataType::F32 => "FLOAT".into(),
             DataType::F64 => "DOUBLE".into(),
             DataType::Bool => "TINYINT(3) UNSIGNED".into(),
