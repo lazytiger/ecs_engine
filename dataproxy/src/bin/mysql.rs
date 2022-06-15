@@ -2,7 +2,7 @@ use dataproxy::{BoolValue, Column, Table};
 use mysql::{prelude::Queryable, Opts, Params, Pool};
 
 fn run() -> mysql::Result<()> {
-    let url = "mysql://game:BabelTime@192.168.176.145:4000/game";
+    let url = "mysql://game:pass@192.168.176.145:4000/game";
     let opts = Opts::from_url(url)?;
     let pool = Pool::new(opts)?;
     let mut conn = pool.get_conn()?;
